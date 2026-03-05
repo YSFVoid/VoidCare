@@ -1,3 +1,5 @@
+#include <Windows.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -92,6 +94,12 @@ QString buildType() {
 #else
     return QStringLiteral("Debug");
 #endif
+}
+
+bool isStandaloneConsoleWindow() {
+    DWORD processIds[16] = {};
+    const DWORD processCount = GetConsoleProcessList(processIds, static_cast<DWORD>(std::size(processIds)));
+    return processCount <= 1;
 }
 
 bool confirmPrompt(const QString& prompt, const bool autoYes) {
@@ -983,6 +991,14 @@ int main(int argc, char* argv[]) {
             out << voidcare::cli::chip(QStringLiteral("[WARN]"), ChipKind::Warn, ctx.ansi) << " " << warning << "\n";
         }
         out.flush();
+    }
+
+    if (!ctx.options.json && args.isEmpty() && isStandaloneConsoleWindow()) {
+        QTextStream out(stdout);
+        QTextStream in(stdin);
+        out << "\nPress Enter to exit...";
+        out.flush();
+        in.readLine();
     }
 
     return result.exitCode;
