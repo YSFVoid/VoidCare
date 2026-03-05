@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$BuildDir = "build",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
@@ -19,12 +19,21 @@ if (Test-Path $stagePath) {
 }
 New-Item -ItemType Directory -Path $stagePath | Out-Null
 
-$exePath = Join-Path $buildPath "app\$Configuration\VoidCare.exe"
-if (!(Test-Path $exePath)) {
-    throw "VoidCare.exe was not found at $exePath. Build first."
+$wpfProject = Join-Path $repoRoot "ui\VoidCare.Wpf.csproj"
+if (!(Test-Path $wpfProject)) {
+    throw "WPF project not found at $wpfProject"
 }
 
-Copy-Item -Path $exePath -Destination $stagePath -Force
+& dotnet publish $wpfProject -c $Configuration -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishReadyToRun=false -p:Platform=x64 -o $stagePath
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet publish failed with exit code $LASTEXITCODE."
+}
+
+$bridgeExe = Join-Path $buildPath "bridge\$Configuration\VoidCare.Bridge.exe"
+if (!(Test-Path $bridgeExe)) {
+    throw "VoidCare.Bridge.exe was not found at $bridgeExe. Build first."
+}
+Copy-Item -Path $bridgeExe -Destination $stagePath -Force
 
 function Resolve-WindeployQtPath {
     $windeployqt = (Get-Command windeployqt -ErrorAction SilentlyContinue).Source
@@ -60,15 +69,6 @@ function Resolve-WindeployQtPath {
         }
     }
 
-    $qtRoot = "C:\Qt"
-    if (Test-Path $qtRoot) {
-        $kits = Get-ChildItem -Path $qtRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "msvc*64" }
-        foreach ($kit in $kits) {
-            $candidates += (Join-Path $kit.FullName "bin\windeployqt.exe")
-        }
-    }
-
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         try {
             $resolved = [System.IO.Path]::GetFullPath($candidate)
@@ -84,11 +84,11 @@ function Resolve-WindeployQtPath {
 
 $windeployqt = Resolve-WindeployQtPath
 if ([string]::IsNullOrWhiteSpace($windeployqt)) {
-    throw "windeployqt not found. Ensure Qt SDK is installed and either PATH or QT_DIR is set."
+    throw "windeployqt not found. Ensure Qt SDK is installed and PATH or QT_DIR is set."
 }
 Write-Host "Using windeployqt at $windeployqt"
 
-& $windeployqt --qmldir (Join-Path $repoRoot "ui\qml") (Join-Path $stagePath "VoidCare.exe")
+& $windeployqt --no-translations --no-opengl-sw (Join-Path $stagePath "VoidCare.Bridge.exe")
 if ($LASTEXITCODE -ne 0) {
     throw "windeployqt failed with exit code $LASTEXITCODE."
 }

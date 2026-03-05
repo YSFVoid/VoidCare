@@ -4,6 +4,8 @@
 /out/
 /dist/
 /CMakeFiles/
+**/bin/
+**/obj/
 
 # CMake generated files
 /CMakeCache.txt
@@ -29,6 +31,8 @@
 *.tmp
 *.cache
 prompt2.txt
+_ref_menu3/
+_full_menu3/
 
 # Binaries/libraries
 *.obj

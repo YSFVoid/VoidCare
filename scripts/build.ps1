@@ -2,7 +2,8 @@ param(
     [string]$BuildDir = "build",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [switch]$BuildTests
+    [switch]$BuildTests,
+    [switch]$SkipWpf
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +53,24 @@ if ($BuildTests) {
     & $ctestExe --test-dir $buildPath -C $Configuration --output-on-failure
     if ($LASTEXITCODE -ne 0) {
         throw "CTest run failed with exit code $LASTEXITCODE."
+    }
+}
+
+if (-not $SkipWpf) {
+    $wpfProject = Join-Path $repoRoot "ui\\VoidCare.Wpf.csproj"
+    if (Test-Path $wpfProject) {
+        & dotnet build $wpfProject -c $Configuration -p:Platform=x64
+        if ($LASTEXITCODE -ne 0) {
+            throw "WPF build failed with exit code $LASTEXITCODE."
+        }
+
+        $publishDir = Join-Path $buildPath "wpf_publish\\$Configuration"
+        & dotnet publish $wpfProject -c $Configuration -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishReadyToRun=false -p:Platform=x64 -o $publishDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "WPF publish failed with exit code $LASTEXITCODE."
+        }
+    } else {
+        Write-Warning "WPF project not found at $wpfProject"
     }
 }
 

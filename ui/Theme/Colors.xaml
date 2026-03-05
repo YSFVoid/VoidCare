@@ -1,0 +1,71 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    <Color x:Key="Background">#0B0E18</Color>
+    <Color x:Key="Surface">#121827</Color>
+    <Color x:Key="Surface2">#1A2133</Color>
+    <Color x:Key="Border">#2F3A56</Color>
+    <Color x:Key="Text">#F1F5FF</Color>
+    <Color x:Key="MutedText">#98A6C7</Color>
+    <Color x:Key="AccentPurple">#6F63FF</Color>
+    <Color x:Key="DangerRed">#D64B5C</Color>
+
+    <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource Background}" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource Surface}" />
+    <SolidColorBrush x:Key="Surface2Brush" Color="{StaticResource Surface2}" />
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource Border}" />
+    <SolidColorBrush x:Key="TextBrush" Color="{StaticResource Text}" />
+    <SolidColorBrush x:Key="MutedTextBrush" Color="{StaticResource MutedText}" />
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentPurple}" />
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerRed}" />
+    <SolidColorBrush x:Key="CardBorderBrush" Color="#39A1AECC" />
+    <SolidColorBrush x:Key="CardBorderHoverBrush" Color="#63C0CCF2" />
+
+    <LinearGradientBrush x:Key="WindowBackdropBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#141B33" Offset="0" />
+        <GradientStop Color="#0B0E18" Offset="0.45" />
+        <GradientStop Color="#15163A" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="SurfaceGlassBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#1A2236" Offset="0" />
+        <GradientStop Color="#131B2B" Offset="1" />
+    </LinearGradientBrush>
+
+    <sys:Double x:Key="Space8">8</sys:Double>
+    <sys:Double x:Key="Space12">12</sys:Double>
+    <sys:Double x:Key="Space16">16</sys:Double>
+    <sys:Double x:Key="Space24">24</sys:Double>
+
+    <sys:Double x:Key="CornerRadius">16</sys:Double>
+    <Thickness x:Key="CardPadding">18</Thickness>
+    <sys:Double x:Key="ControlHeight">36</sys:Double>
+
+    <DropShadowEffect x:Key="CardShadowEffect"
+                      BlurRadius="24"
+                      Direction="270"
+                      ShadowDepth="0"
+                      Opacity="0.4"
+                      Color="#79000000" />
+
+    <DropShadowEffect x:Key="CardHoverShadowEffect"
+                      BlurRadius="30"
+                      Direction="270"
+                      ShadowDepth="0"
+                      Opacity="0.58"
+                      Color="#8A5F68DE" />
+
+    <DropShadowEffect x:Key="SidebarActiveGlowEffect"
+                      BlurRadius="20"
+                      Direction="270"
+                      ShadowDepth="0"
+                      Opacity="0.9"
+                      Color="#906F63FF" />
+
+    <DropShadowEffect x:Key="FocusGlowEffect"
+                      BlurRadius="18"
+                      Direction="270"
+                      ShadowDepth="0"
+                      Opacity="0.7"
+                      Color="#706F63FF" />
+</ResourceDictionary>

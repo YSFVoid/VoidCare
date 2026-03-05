@@ -62,6 +62,7 @@ public:
     [[nodiscard]] QVariantList installedApps() const;
     [[nodiscard]] QStringList logs() const;
     [[nodiscard]] QString healthSummary() const;
+    [[nodiscard]] QVariantMap snapshotState() const;
 
     Q_INVOKABLE void navigateTo(const QString& pageName);
     Q_INVOKABLE void refreshAntivirus();
@@ -107,6 +108,7 @@ public:
 
     Q_INVOKABLE QVariantMap refreshHealthReport();
     Q_INVOKABLE void clearLogs();
+    Q_INVOKABLE QVariantMap getInitialSnapshot();
 
 public slots:
     void setDiscordEnabled(bool enabled);
@@ -121,6 +123,8 @@ signals:
     void installedAppsChanged();
     void logsChanged();
     void healthSummaryChanged();
+    void logAppended(const QString& line, bool isError);
+    void stateChanged(const QString& scope);
 
 private:
     QVariantMap guardOrBlock(const QString& actionName,

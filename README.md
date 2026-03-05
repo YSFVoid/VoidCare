@@ -1,6 +1,8 @@
-# VoidCare (VoidTools)
+﻿# VoidCare (VoidTools)
 
-Windows x64 offline optimization, health, and security multi-tool built with C++20, Qt 6, and QML.
+Windows x64 offline optimization, health, and security multi-tool.
+Frontend: WPF (`net8.0-windows`, x64).
+Backend: C++20 services over local JSONL bridge (`VoidCare.Bridge.exe`).
 
 **Developed by Ysf (Lone Wolf Developer)**
 
@@ -23,14 +25,15 @@ Windows x64 offline optimization, health, and security multi-tool built with C++
 
 - Visual Studio 2022 (MSVC x64)
 - CMake 3.24+
-- Qt 6.6+ (Qt Quick, QML, Quick Controls 2)
+- Qt 6.6+ SDK (for bridge/runtime dependencies)
+- .NET SDK 8+
 - PowerShell 5+
 
 ## Build
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -QtDir "C:\Qt\6.8.0\msvc2022_64"
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Configuration Release
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Configuration Release -BuildTests
 ```
 
 ## Package (Portable)
@@ -39,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Co
 powershell -ExecutionPolicy Bypass -File .\scripts\package-portable.ps1 -BuildDir build -Configuration Release -OutputDir dist
 ```
 
-Distribution format is portable folder/zip (`VoidCare.exe` + Qt runtime files). It is not a single-file EXE.
+Distribution format is portable folder/zip (`VoidCare.exe` + `VoidCare.Bridge.exe` + required runtime files). It is not a single-file EXE.
 
 ## Discord Rich Presence
 
@@ -52,7 +55,7 @@ Distribution format is portable folder/zip (`VoidCare.exe` + Qt runtime files). 
 
 - `core/`
 - `platform/windows/`
+- `bridge/`
 - `ui/`
-- `app/`
 - `scripts/`
 - `tests/`

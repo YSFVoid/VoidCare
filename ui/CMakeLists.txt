@@ -5,7 +5,6 @@ add_library(voidcare_ui STATIC
     src/app_controller.cpp
     src/persistence_model.cpp
     src/suspicious_model.cpp
-    qml/qml.qrc
 )
 
 target_include_directories(voidcare_ui
@@ -17,9 +16,6 @@ target_link_libraries(voidcare_ui
     PUBLIC
         Qt6::Core
         Qt6::Gui
-        Qt6::Qml
-        Qt6::Quick
-        Qt6::QuickControls2
         voidcare_core
 )
 

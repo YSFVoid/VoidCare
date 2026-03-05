@@ -46,7 +46,7 @@ if((NOT Qt6_DIR OR Qt6_DIR STREQUAL "")
     endif()
 endif()
 
-find_package(Qt6 6.6 QUIET COMPONENTS Core Gui Qml Quick QuickControls2 Widgets)
+find_package(Qt6 6.6 QUIET COMPONENTS Core Gui Widgets)
 if(NOT Qt6_FOUND)
     message(FATAL_ERROR
         "Qt6 (>= 6.6) was not found.\n"
@@ -60,7 +60,7 @@ endif()
 add_subdirectory(platform/windows)
 add_subdirectory(core)
 add_subdirectory(ui)
-add_subdirectory(app)
+add_subdirectory(bridge)
 
 if(VOIDCARE_ENABLE_TESTS)
     enable_testing()

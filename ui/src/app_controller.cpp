@@ -76,7 +76,7 @@ QString AppController::footerText() const {
 }
 
 QString AppController::warningBannerText() const {
-    return QStringLiteral("Suspicious ? confirmed malware. Review before deleting.");
+    return QStringLiteral("Suspicious ≠ confirmed malware. Review before deleting.");
 }
 
 bool AppController::discordEnabled() const {
@@ -143,6 +143,29 @@ QString AppController::healthSummary() const {
     return m_healthSummary;
 }
 
+QVariantMap AppController::snapshotState() const {
+    QVariantMap map;
+    map.insert(QStringLiteral("currentPage"), m_currentPage);
+    map.insert(QStringLiteral("creditsText"), creditsText());
+    map.insert(QStringLiteral("footerText"), footerText());
+    map.insert(QStringLiteral("warningBannerText"), warningBannerText());
+    map.insert(QStringLiteral("discordEnabled"), discordEnabled());
+    map.insert(QStringLiteral("discordChipText"), discordChipText());
+    map.insert(QStringLiteral("discordAboutStatus"), discordAboutStatus());
+    map.insert(QStringLiteral("antivirusProviderName"), m_antivirusProviderName);
+    map.insert(QStringLiteral("antivirusStatus"), m_antivirusStatus);
+    map.insert(QStringLiteral("defenderScanAvailable"), m_defenderScanAvailable);
+    map.insert(QStringLiteral("defenderRemediationAvailable"), m_defenderRemediationAvailable);
+    map.insert(QStringLiteral("externalScannerAvailable"), externalScannerAvailable());
+    map.insert(QStringLiteral("persistenceEntries"), m_persistenceVariant);
+    map.insert(QStringLiteral("suspiciousEntries"), m_suspiciousVariant);
+    map.insert(QStringLiteral("quarantineEntries"), m_quarantineVariant);
+    map.insert(QStringLiteral("installedApps"), m_appsVariant);
+    map.insert(QStringLiteral("logs"), m_logs);
+    map.insert(QStringLiteral("healthSummary"), m_healthSummary);
+    return map;
+}
+
 void AppController::navigateTo(const QString& pageName) {
     if (m_currentPage == pageName) {
         return;
@@ -151,6 +174,7 @@ void AppController::navigateTo(const QString& pageName) {
     m_currentPage = pageName;
     emit currentPageChanged();
     updateDiscordPresenceForCurrentPage();
+    emit stateChanged(QStringLiteral("navigation"));
 }
 
 void AppController::refreshAntivirus() {
@@ -190,6 +214,7 @@ void AppController::refreshAntivirus() {
         m_antivirusProvider->canRemediate();
 
     emit antivirusChanged();
+    emit stateChanged(QStringLiteral("antivirus"));
 }
 
 bool AppController::configureExternalScanner(const QString& executable, const QString& argsLine) {
@@ -271,6 +296,7 @@ QVariantMap AppController::refreshPersistenceAudit() {
     });
     rebuildPersistenceVariant();
     emit persistenceEntriesChanged();
+    emit stateChanged(QStringLiteral("persistence"));
     return makeActionResult(true,
                             QStringLiteral("Persistence audit refreshed: %1 entries.")
                                 .arg(m_persistenceRaw.size()),
@@ -311,6 +337,7 @@ QVariantMap AppController::runQuickSuspiciousScan() {
         });
     rebuildSuspiciousVariant();
     emit suspiciousEntriesChanged();
+    emit stateChanged(QStringLiteral("suspicious"));
     return makeActionResult(true,
                             QStringLiteral("Quick suspicious scan completed: %1 items.")
                                 .arg(m_suspiciousRaw.size()),
@@ -333,6 +360,7 @@ QVariantMap AppController::runFullSuspiciousScan(const QStringList& roots) {
         });
     rebuildSuspiciousVariant();
     emit suspiciousEntriesChanged();
+    emit stateChanged(QStringLiteral("suspicious"));
     return makeActionResult(true,
                             QStringLiteral("Full suspicious scan completed: %1 items.")
                                 .arg(m_suspiciousRaw.size()),
@@ -376,6 +404,8 @@ QVariantMap AppController::quarantineSelected(const QStringList& filePaths,
             m_suspiciousRaw.end());
         rebuildSuspiciousVariant();
         emit suspiciousEntriesChanged();
+        emit stateChanged(QStringLiteral("quarantine"));
+        emit stateChanged(QStringLiteral("suspicious"));
     }
 
     const QString message = result.success
@@ -407,6 +437,7 @@ QVariantMap AppController::restoreQuarantined(const QStringList& quarantinePaths
             m_quarantineRaw.end());
         rebuildQuarantineVariant();
         emit quarantineEntriesChanged();
+        emit stateChanged(QStringLiteral("quarantine"));
     }
 
     return makeActionResult(result.success, result.message, result.exitCode);
@@ -444,6 +475,7 @@ QVariantMap AppController::deleteQuarantined(const QStringList& quarantinePaths,
             m_quarantineRaw.end());
         rebuildQuarantineVariant();
         emit quarantineEntriesChanged();
+        emit stateChanged(QStringLiteral("quarantine"));
     }
 
     appendLog(QStringLiteral("Delete summary:\n%1").arg(summary), !result.success);
@@ -536,6 +568,7 @@ QVariantMap AppController::refreshInstalledApps() {
     m_appsRaw = m_windowsApps->enumerateInstalledApps();
     rebuildAppsVariant();
     emit installedAppsChanged();
+    emit stateChanged(QStringLiteral("apps"));
 
     return makeActionResult(true, QStringLiteral("Installed apps refreshed: %1 items.").arg(m_appsRaw.size()), 0);
 }
@@ -559,6 +592,7 @@ QVariantMap AppController::refreshHealthReport() {
                                QString::number(report.startupItemCount),
                                report.heavyProcesses.join(QStringLiteral(", ")));
     emit healthSummaryChanged();
+    emit stateChanged(QStringLiteral("health"));
 
     return makeActionResult(true, QStringLiteral("Health report updated."), 0);
 }
@@ -566,6 +600,15 @@ QVariantMap AppController::refreshHealthReport() {
 void AppController::clearLogs() {
     m_logs.clear();
     emit logsChanged();
+    emit stateChanged(QStringLiteral("logs"));
+}
+
+QVariantMap AppController::getInitialSnapshot() {
+    QVariantMap map;
+    map.insert(QStringLiteral("success"), true);
+    map.insert(QStringLiteral("message"), QStringLiteral("Snapshot ready."));
+    map.insert(QStringLiteral("state"), snapshotState());
+    return map;
 }
 
 void AppController::setDiscordEnabled(const bool enabled) {
@@ -576,6 +619,7 @@ void AppController::setDiscordEnabled(const bool enabled) {
     m_discord->setEnabled(enabled);
     updateDiscordPresenceForCurrentPage();
     emit discordStateChanged();
+    emit stateChanged(QStringLiteral("discord"));
 }
 
 QVariantMap AppController::guardOrBlock(const QString& actionName,
@@ -613,11 +657,13 @@ void AppController::appendLog(const QString& line, const bool isError) {
     const QString tagged = QStringLiteral("[%1] %2%3")
                                .arg(timestamp, isError ? QStringLiteral("[ERROR] ") : QString(), line);
     m_logs.push_back(tagged);
+    emit logAppended(tagged, isError);
     constexpr int maxLogs = 800;
     while (m_logs.size() > maxLogs) {
         m_logs.removeFirst();
     }
     emit logsChanged();
+    emit stateChanged(QStringLiteral("logs"));
 }
 
 void AppController::updateDiscordPresenceForCurrentPage() {
