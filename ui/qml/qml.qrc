@@ -1,0 +1,13 @@
+<RCC>
+  <qresource prefix="/ui/qml">
+    <file>Main.qml</file>
+    <file>components/GlassCard.qml</file>
+    <file>components/AccentButton.qml</file>
+    <file>pages/DashboardPage.qml</file>
+    <file>pages/SecurityPage.qml</file>
+    <file>pages/OptimizePage.qml</file>
+    <file>pages/GamingPage.qml</file>
+    <file>pages/AppsPage.qml</file>
+    <file>pages/AboutPage.qml</file>
+  </qresource>
+</RCC>
