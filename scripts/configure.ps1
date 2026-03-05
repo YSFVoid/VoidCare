@@ -4,7 +4,9 @@ param(
     [string]$BuildType = "Release",
     [string]$DiscordClientId = "1479026910574153921",
     [string]$QtDir = "",
+    [switch]$DisableCli,
     [switch]$DisableImGui,
+    [switch]$EnableImGui,
     [switch]$BuildWpf
 )
 
@@ -110,10 +112,13 @@ $cmakeArgs = @(
     "-DCMAKE_BUILD_TYPE=$BuildType"
 )
 
-$imguiValue = if ($DisableImGui) { "OFF" } else { "ON" }
+$cliValue = if ($DisableCli) { "OFF" } else { "ON" }
+$imguiEnabled = $EnableImGui -and -not $DisableImGui
+$imguiValue = if ($imguiEnabled) { "ON" } else { "OFF" }
 $wpfValue = if ($BuildWpf) { "ON" } else { "OFF" }
 $bridgeValue = if ($BuildWpf) { "ON" } else { "OFF" }
 
+$cmakeArgs += "-DVOIDCARE_BUILD_CLI=$cliValue"
 $cmakeArgs += "-DVOIDCARE_BUILD_IMGUI=$imguiValue"
 $cmakeArgs += "-DVOIDCARE_BUILD_WPF=$wpfValue"
 $cmakeArgs += "-DVOIDCARE_BUILD_BRIDGE=$bridgeValue"

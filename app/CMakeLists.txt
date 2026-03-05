@@ -32,6 +32,8 @@ target_link_libraries(VoidCare
         dxgi
         d3dcompiler
         dwmapi
+        windowscodecs
+        ole32
 )
 
 target_link_options(VoidCare

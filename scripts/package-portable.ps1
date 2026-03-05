@@ -24,9 +24,12 @@ function Resolve-PrimaryExe {
     param([string]$RootBuild, [string]$Config)
 
     $candidates = @(
+        (Join-Path $RootBuild "cli\$Config\voidcare.exe"),
+        (Join-Path $RootBuild "cli\$Config\VoidCare.exe"),
         (Join-Path $RootBuild "app\$Config\VoidCare.exe"),
         (Join-Path $RootBuild "$Config\VoidCare.exe"),
-        (Join-Path $RootBuild "VoidCare.exe")
+        (Join-Path $RootBuild "VoidCare.exe"),
+        (Join-Path $RootBuild "voidcare.exe")
     )
 
     foreach ($candidate in $candidates) {
@@ -87,9 +90,10 @@ function Resolve-WindeployQtPath {
 
 $primaryExe = Resolve-PrimaryExe -RootBuild $buildPath -Config $Configuration
 if (-not $primaryExe) {
-    throw "VoidCare.exe was not found in '$buildPath'. Build first (ImGui target)."
+    throw "voidcare.exe/VoidCare.exe was not found in '$buildPath'. Build first."
 }
-Copy-Item -Path $primaryExe -Destination (Join-Path $stagePath "VoidCare.exe") -Force
+$primaryName = [System.IO.Path]::GetFileName($primaryExe)
+Copy-Item -Path $primaryExe -Destination (Join-Path $stagePath $primaryName) -Force
 
 $assetSource = Join-Path $repoRoot "app\assets"
 if (Test-Path $assetSource) {
@@ -102,7 +106,7 @@ if ([string]::IsNullOrWhiteSpace($windeployqt)) {
 }
 Write-Host "Using windeployqt at $windeployqt"
 
-& $windeployqt --no-translations --no-opengl-sw (Join-Path $stagePath "VoidCare.exe")
+& $windeployqt --no-translations --no-opengl-sw (Join-Path $stagePath $primaryName)
 if ($LASTEXITCODE -ne 0) {
     throw "windeployqt failed with exit code $LASTEXITCODE."
 }

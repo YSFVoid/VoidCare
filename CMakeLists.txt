@@ -19,7 +19,8 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 option(VOIDCARE_ENABLE_TESTS "Build VoidCare tests" ON)
-option(VOIDCARE_BUILD_IMGUI "Build the ImGui frontend (primary)" ON)
+option(VOIDCARE_BUILD_CLI "Build the CLI frontend (primary)" ON)
+option(VOIDCARE_BUILD_IMGUI "Build the ImGui frontend (optional)" OFF)
 option(VOIDCARE_BUILD_WPF "Enable WPF experimental frontend artifacts" OFF)
 option(VOIDCARE_BUILD_BRIDGE "Build the C++ bridge executable" OFF)
 
@@ -69,6 +70,10 @@ add_subdirectory(platform/windows)
 add_subdirectory(core)
 add_subdirectory(ui)
 
+if(VOIDCARE_BUILD_CLI)
+    add_subdirectory(cli)
+endif()
+
 if(VOIDCARE_BUILD_IMGUI)
     add_subdirectory(app)
 endif()
@@ -77,8 +82,8 @@ if(VOIDCARE_BUILD_BRIDGE)
     add_subdirectory(bridge)
 endif()
 
-if(NOT VOIDCARE_BUILD_IMGUI AND NOT VOIDCARE_BUILD_BRIDGE)
-    message(WARNING "No runnable frontend target is enabled. Enable VOIDCARE_BUILD_IMGUI and/or VOIDCARE_BUILD_BRIDGE.")
+if(NOT VOIDCARE_BUILD_CLI AND NOT VOIDCARE_BUILD_IMGUI AND NOT VOIDCARE_BUILD_BRIDGE)
+    message(WARNING "No runnable frontend target is enabled. Enable VOIDCARE_BUILD_CLI and/or VOIDCARE_BUILD_IMGUI and/or VOIDCARE_BUILD_BRIDGE.")
 endif()
 
 if(VOIDCARE_ENABLE_TESTS)

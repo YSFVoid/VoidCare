@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <shellscalingapi.h>
 #include <tchar.h>
+#include <wincodec.h>
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include <QCoreApplication>
+#include <QByteArray>
 #include <QDateTime>
 #include <QEventLoop>
 #include <QSet>
@@ -348,19 +350,6 @@ FontPack loadFonts(const float dpiScale, const std::wstring& exeDir) {
     return pack;
 }
 
-void drawStatusChip(const std::string& text, const ImVec4& bgColor, const ImVec4& textColor) {
-    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-    const ImVec2 padding(10.0f, 5.0f);
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const ImVec2 size(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f);
-    const ImRect rect(pos, pos + size);
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(bgColor), size.y * 0.5f);
-    drawList->AddRect(rect.Min, rect.Max, ImGui::GetColorU32(ImVec4(bgColor.x, bgColor.y, bgColor.z, 0.85f)), size.y * 0.5f);
-    drawList->AddText(ImVec2(rect.Min.x + padding.x, rect.Min.y + padding.y), ImGui::GetColorU32(textColor), text.c_str());
-    ImGui::Dummy(size);
-}
-
 struct NavItem {
     voidcare::app::PageId page;
     const char* id;
@@ -418,9 +407,164 @@ struct RuntimeState {
     float pageFade = 1.0f;
     voidcare::app::PageId renderedPage = voidcare::app::PageId::Dashboard;
     int configIndex = 0;
+    bool performancePreset = true;
     FontPack fonts;
     std::wstring exeDir;
+    bool logsDrawerExpanded = false;
+    ID3D11ShaderResourceView* logoTexture = nullptr;
+    int logoWidth = 0;
+    int logoHeight = 0;
+    bool logoLoadAttempted = false;
 };
+
+bool loadTextureFromFileW(const std::wstring& path,
+                          ID3D11Device* device,
+                          ID3D11ShaderResourceView** outSrv,
+                          int* outWidth,
+                          int* outHeight) {
+    if (device == nullptr || outSrv == nullptr || outWidth == nullptr || outHeight == nullptr) {
+        return false;
+    }
+
+    *outSrv = nullptr;
+    *outWidth = 0;
+    *outHeight = 0;
+
+    IWICImagingFactory* factory = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* converter = nullptr;
+
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    hr = factory->CreateDecoderFromFilename(
+        path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    if (FAILED(hr)) {
+        factory->Release();
+        return false;
+    }
+
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr)) {
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    hr = factory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) {
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    hr = converter->Initialize(
+        frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr)) {
+        converter->Release();
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    UINT width = 0;
+    UINT height = 0;
+    frame->GetSize(&width, &height);
+    if (width == 0 || height == 0) {
+        converter->Release();
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
+    const UINT stride = width * 4u;
+    hr = converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data());
+    if (FAILED(hr)) {
+        converter->Release();
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA subresource = {};
+    subresource.pSysMem = pixels.data();
+    subresource.SysMemPitch = stride;
+
+    ID3D11Texture2D* texture = nullptr;
+    hr = device->CreateTexture2D(&desc, &subresource, &texture);
+    if (FAILED(hr) || texture == nullptr) {
+        converter->Release();
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        return false;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = desc.Format;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    hr = device->CreateShaderResourceView(texture, &srvDesc, outSrv);
+    texture->Release();
+
+    converter->Release();
+    frame->Release();
+    decoder->Release();
+    factory->Release();
+
+    if (FAILED(hr) || *outSrv == nullptr) {
+        return false;
+    }
+
+    *outWidth = static_cast<int>(width);
+    *outHeight = static_cast<int>(height);
+    return true;
+}
+
+void ensureSidebarLogoLoaded(RuntimeState* state) {
+    if (state == nullptr || state->logoLoadAttempted) {
+        return;
+    }
+    state->logoLoadAttempted = true;
+
+    const std::filesystem::path logoPath = std::filesystem::path(state->exeDir) / "assets" / "logo_vt.png";
+    if (!std::filesystem::exists(logoPath)) {
+        return;
+    }
+
+    loadTextureFromFileW(logoPath.wstring(), g_pd3dDevice, &state->logoTexture, &state->logoWidth, &state->logoHeight);
+}
+
+void releaseSidebarLogo(RuntimeState* state) {
+    if (state == nullptr) {
+        return;
+    }
+    if (state->logoTexture != nullptr) {
+        state->logoTexture->Release();
+        state->logoTexture = nullptr;
+    }
+    state->logoWidth = 0;
+    state->logoHeight = 0;
+}
 
 void pruneSelections(voidcare::app::UiState* state) {
     if (state == nullptr) {
@@ -673,43 +817,58 @@ void updateSystemMetrics(RuntimeState* state) {
     state->nextSampleTime = now + std::chrono::milliseconds(800);
 }
 
-void drawMetricTile(const char* title, const QString& value, const float height) {
-    const ImVec2 tileSize((ImGui::GetContentRegionAvail().x - 24.0f) / 3.0f, height);
-    ImGui::BeginChild(title, tileSize, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
-    ImGui::TextColored(ImVec4(0.64f, 0.64f, 0.75f, 1.0f), "%s", title);
-    const std::string valueUtf8 = toUtf8(value);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.98f, 1.0f));
-    ImGui::SetWindowFontScale(1.1f);
-    ImGui::TextUnformatted(valueUtf8.c_str());
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleColor();
-    ImGui::EndChild();
+void renderProviderStatusChip(const voidcare::app::UiSnapshot& snapshot) {
+    using voidcare::app::theme::ChipVariant;
+    if (isLikelyUnavailableAntivirus(snapshot)) {
+        voidcare::app::theme::StatusChip("Unavailable", ChipVariant::Danger);
+    } else if (snapshot.defenderScanAvailable || snapshot.externalScannerAvailable) {
+        voidcare::app::theme::StatusChip("Active", ChipVariant::Accent);
+    } else {
+        voidcare::app::theme::StatusChip("Passive", ChipVariant::Neutral);
+    }
 }
 
-void renderLogsPanel(RuntimeState* state, const float height, const bool showClearButton) {
+void renderLogsDrawer(RuntimeState* state, const bool allowClearButton) {
     if (state == nullptr) {
         return;
     }
 
-    if (voidcare::app::theme::beginCard("logs_card", ImVec2(0.0f, height))) {
-        voidcare::app::theme::cardHeader("Logs", "Live backend output");
-        if (ImGui::Button("Copy Logs")) {
+    const char* label = state->logsDrawerExpanded ? "Hide Logs Drawer" : "Show Logs Drawer";
+    if (ImGui::Button(label, ImVec2(150.0f, 32.0f))) {
+        state->logsDrawerExpanded = !state->logsDrawerExpanded;
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.66f, 0.66f, 0.78f, 1.0f), "Monospace backend output");
+
+    if (!state->logsDrawerExpanded) {
+        return;
+    }
+
+    const float drawerHeight = std::clamp(ImGui::GetContentRegionAvail().y * 0.36f, 180.0f, 330.0f);
+    if (voidcare::app::theme::BeginPanel(
+            "logs_drawer_panel", "Logs Drawer", ImVec2(0.0f, drawerHeight), "Live backend stream")) {
+        if (ImGui::Button("Copy Logs", ImVec2(110.0f, 32.0f))) {
             const QString joined = state->ui.snapshot.logs.join(QStringLiteral("\n"));
             const std::string utf8 = toUtf8(joined);
             ImGui::SetClipboardText(utf8.c_str());
         }
-        if (showClearButton) {
+        if (allowClearButton) {
             ImGui::SameLine();
-            if (ImGui::Button("Clear")) {
+            if (ImGui::Button("Clear", ImVec2(86.0f, 32.0f))) {
                 submitRequest(state, QStringLiteral("clear_logs"), {}, ActionKind::None, false, false, {});
             }
         }
         ImGui::Separator();
-        ImGui::BeginChild("log_console", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::BeginChild("logs_console_area", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::PushFont(state->fonts.mono ? state->fonts.mono : ImGui::GetFont());
         for (const QString& line : state->ui.snapshot.logs) {
-            const std::string utf8 = toUtf8(line);
-            ImGui::TextUnformatted(utf8.c_str());
+            const bool isError = line.contains(QStringLiteral("error"), Qt::CaseInsensitive) ||
+                                 line.contains(QStringLiteral("failed"), Qt::CaseInsensitive);
+            const bool isWarn = line.contains(QStringLiteral("warn"), Qt::CaseInsensitive);
+            const ImVec4 color = isError ? ImVec4(0.97f, 0.48f, 0.49f, 1.0f)
+                                         : (isWarn ? ImVec4(0.97f, 0.80f, 0.50f, 1.0f)
+                                                   : ImVec4(0.83f, 0.83f, 0.92f, 1.0f));
+            ImGui::TextColored(color, "%s", toUtf8(line).c_str());
         }
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 12.0f) {
             ImGui::SetScrollHereY(1.0f);
@@ -717,7 +876,7 @@ void renderLogsPanel(RuntimeState* state, const float height, const bool showCle
         ImGui::PopFont();
         ImGui::EndChild();
     }
-    voidcare::app::theme::endCard();
+    voidcare::app::theme::EndPanel();
 }
 
 void renderDashboard(RuntimeState* state) {
@@ -725,125 +884,210 @@ void renderDashboard(RuntimeState* state) {
         return;
     }
 
-    const float contentWidth = ImGui::GetContentRegionAvail().x;
-    const bool twoColumns = contentWidth > 1120.0f;
-    if (ImGui::BeginTable("dashboard_cards",
-                          twoColumns ? 2 : 1,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+    if (ImGui::BeginTable(
+            "dashboard_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("sys_health_card", ImVec2(0.0f, 320.0f))) {
-            voidcare::app::theme::cardHeader("System Health", "Live CPU, RAM, and disk utilization");
-            drawMetricTile("CPU", QStringLiteral("%1%").arg(QString::number(state->cpuPercent, 'f', 1)), 78.0f);
-            ImGui::SameLine();
-            drawMetricTile("RAM", QStringLiteral("%1%").arg(QString::number(state->ramPercent, 'f', 1)), 78.0f);
-            ImGui::SameLine();
-            drawMetricTile("Disk", QStringLiteral("%1%").arg(QString::number(state->diskPercent, 'f', 1)), 78.0f);
-
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Last scan:");
-            ImGui::SameLine();
-            ImGui::TextUnformatted(toUtf8(state->lastScanStamp).c_str());
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Last optimize:");
-            ImGui::SameLine();
-            ImGui::TextUnformatted(toUtf8(state->lastOptimizeStamp).c_str());
-
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "CPU Trend");
-            if (!state->cpuHistory.empty()) {
-                ImGui::PlotLines("##cpu_history",
-                                 state->cpuHistory.data(),
-                                 static_cast<int>(state->cpuHistory.size()),
-                                 0,
-                                 nullptr,
-                                 0.0f,
-                                 100.0f,
-                                 ImVec2(0.0f, 72.0f));
-            } else {
-                ImGui::BeginChild("cpu_empty", ImVec2(0.0f, 72.0f), true);
-                ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.74f, 1.0f), "Collecting metrics...");
-                ImGui::EndChild();
+        if (voidcare::app::theme::BeginPanel("dashboard_security_panel",
+                                             "Security",
+                                             ImVec2(0.0f, 0.0f),
+                                             "Provider, scan, persistence, suspicious files")) {
+            if (voidcare::app::theme::BeginSettingRows("dashboard_security_rows")) {
+                voidcare::app::theme::SettingRow("Provider status",
+                                                 "Current antivirus mode",
+                                                 [&]() { renderProviderStatusChip(state->ui.snapshot); });
+                voidcare::app::theme::SettingRow("Provider",
+                                                 "Detected product",
+                                                 [&]() {
+                                                     ImGui::TextUnformatted(
+                                                         toShortUtf8(state->ui.snapshot.antivirusProviderName, 40).c_str());
+                                                 });
+                voidcare::app::theme::SettingRow("Quick scan",
+                                                 "Defender quick scan",
+                                                 [&]() {
+                                                     const bool disabled = !state->ui.snapshot.defenderScanAvailable;
+                                                     if (disabled) {
+                                                         ImGui::BeginDisabled();
+                                                     }
+                                                     if (ImGui::Button("Run##dashboard_quick", ImVec2(120.0f, 32.0f))) {
+                                                         submitRequest(state,
+                                                                       QStringLiteral("run_defender_quick_scan"),
+                                                                       {},
+                                                                       ActionKind::Scan,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                     if (disabled) {
+                                                         ImGui::EndDisabled();
+                                                     }
+                                                 });
+                voidcare::app::theme::SettingRow("Full scan",
+                                                 "Defender full scan",
+                                                 [&]() {
+                                                     const bool disabled = !state->ui.snapshot.defenderScanAvailable;
+                                                     if (disabled) {
+                                                         ImGui::BeginDisabled();
+                                                     }
+                                                     if (ImGui::Button("Run##dashboard_full", ImVec2(120.0f, 32.0f))) {
+                                                         submitRequest(state,
+                                                                       QStringLiteral("run_defender_full_scan"),
+                                                                       {},
+                                                                       ActionKind::Scan,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                     if (disabled) {
+                                                         ImGui::EndDisabled();
+                                                     }
+                                                 });
+                voidcare::app::theme::SettingRow("Persistence audit",
+                                                 "Startup/tasks/services",
+                                                 [&]() {
+                                                     if (ImGui::Button("Refresh##dashboard_persist", ImVec2(120.0f, 32.0f))) {
+                                                         submitRequest(state,
+                                                                       QStringLiteral("refresh_persistence_audit"),
+                                                                       {},
+                                                                       ActionKind::None,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                     ImGui::SameLine();
+                                                     ImGui::Text("%d rows", state->ui.snapshot.persistenceEntries.size());
+                                                 });
+                voidcare::app::theme::SettingRow("Suspicious files",
+                                                 "Heuristic scan entry point",
+                                                 [&]() {
+                                                     if (ImGui::Button("Quick##dashboard_suspicious", ImVec2(86.0f, 32.0f))) {
+                                                         submitRequest(state,
+                                                                       QStringLiteral("run_quick_suspicious_scan"),
+                                                                       {},
+                                                                       ActionKind::Scan,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                     ImGui::SameLine();
+                                                     if (ImGui::Button("Full##dashboard_suspicious", ImVec2(86.0f, 32.0f))) {
+                                                         QVariantMap args;
+                                                         args.insert(QStringLiteral("roots"),
+                                                                     splitRoots(QString::fromUtf8(state->fullScanRoots.data())
+                                                                                    .trimmed()));
+                                                         submitRequest(state,
+                                                                       QStringLiteral("run_full_suspicious_scan"),
+                                                                       args,
+                                                                       ActionKind::Scan,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                 });
             }
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("antivirus_card", ImVec2(0.0f, 320.0f))) {
-            voidcare::app::theme::cardHeader("Antivirus", "Provider and scan controls");
-
-            if (isLikelyUnavailableAntivirus(state->ui.snapshot)) {
-                drawStatusChip("Unavailable", ImVec4(0.38f, 0.18f, 0.22f, 1.0f), ImVec4(1.0f, 0.84f, 0.84f, 1.0f));
-            } else if (state->ui.snapshot.defenderScanAvailable || state->ui.snapshot.externalScannerAvailable) {
-                drawStatusChip("Active", ImVec4(0.26f, 0.20f, 0.56f, 1.0f), ImVec4(0.95f, 0.93f, 1.0f, 1.0f));
-            } else {
-                drawStatusChip("Passive", ImVec4(0.25f, 0.28f, 0.36f, 1.0f), ImVec4(0.90f, 0.90f, 0.96f, 1.0f));
-            }
-
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Provider");
-            ImGui::TextUnformatted(toUtf8(state->ui.snapshot.antivirusProviderName).c_str());
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Status");
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
             ImGui::TextWrapped("%s", toUtf8(state->ui.snapshot.antivirusStatus).c_str());
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Last scan");
-            ImGui::TextUnformatted(toUtf8(state->lastScanStamp).c_str());
-
-            ImGui::SetCursorPosY(ImGui::GetWindowSize().y - 54.0f);
-            if (!state->ui.snapshot.defenderScanAvailable) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Quick Scan", ImVec2(110.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("run_defender_quick_scan"), {}, ActionKind::Scan, false, false, {});
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Full Scan", ImVec2(110.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("run_defender_full_scan"), {}, ActionKind::Scan, false, false, {});
-            }
-            if (!state->ui.snapshot.defenderScanAvailable) {
-                ImGui::EndDisabled();
-            }
-            ImGui::SameLine();
-            if (!state->ui.snapshot.defenderRemediationAvailable) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Auto-Remediate", ImVec2(130.0f, 34.0f))) {
-                submitRequest(state,
-                              QStringLiteral("run_defender_auto_remediate"),
-                              {},
-                              ActionKind::Scan,
-                              false,
-                              false,
-                              {});
-            }
-            if (!state->ui.snapshot.defenderRemediationAvailable) {
-                ImGui::EndDisabled();
-            }
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
 
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("dashboard_actions_card", ImVec2(0.0f, 250.0f))) {
-            voidcare::app::theme::cardHeader("Quick Actions", "Common operations");
-            if (ImGui::Button("Refresh Antivirus", ImVec2(170.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("refresh_antivirus"), {}, ActionKind::None, false, false, {});
+        if (voidcare::app::theme::BeginPanel(
+                "dashboard_optimize_panel", "Optimization", ImVec2(0.0f, 0.0f), "Preset, cleanup, and gaming")) {
+            if (voidcare::app::theme::BeginSettingRows("dashboard_optimize_rows")) {
+                voidcare::app::theme::SettingRow("Performance preset",
+                                                 "Session-only preset toggle",
+                                                 [&]() {
+                                                     voidcare::app::theme::togglePill(
+                                                         "dashboard_perf_toggle", &state->performancePreset, ImVec2(72.0f, 32.0f));
+                                                 });
+                voidcare::app::theme::SettingRow("Safe cleanup",
+                                                 "Temp and recycle cleanup",
+                                                 [&]() {
+                                                     if (ImGui::Button("Run##dashboard_safe_opt", ImVec2(120.0f, 32.0f))) {
+                                                         queueGuardedAction(state,
+                                                                            QStringLiteral("Safe Optimization"),
+                                                                            QStringLiteral("Run safe cleanup now?"),
+                                                                            QStringLiteral("run_safe_optimization"),
+                                                                            {},
+                                                                            ActionKind::Optimize,
+                                                                            false);
+                                                     }
+                                                 });
+                voidcare::app::theme::SettingRow("Remove bloat",
+                                                 "Aggressive option (default off)",
+                                                 [&]() {
+                                                     voidcare::app::theme::togglePill(
+                                                         "dashboard_remove_bloat", &state->ui.removeBloat, ImVec2(72.0f, 32.0f));
+                                                 });
+                voidcare::app::theme::SettingRow("Disable Copilot",
+                                                 "Aggressive option (default off)",
+                                                 [&]() {
+                                                     voidcare::app::theme::togglePill("dashboard_disable_copilot",
+                                                                                      &state->ui.disableCopilot,
+                                                                                      ImVec2(72.0f, 32.0f));
+                                                 });
+                voidcare::app::theme::SettingRow("Aggressive run",
+                                                 "Run selected aggressive options",
+                                                 [&]() {
+                                                     if (ImGui::Button("Run##dashboard_aggressive_opt",
+                                                                       ImVec2(120.0f, 32.0f))) {
+                                                         QVariantMap args;
+                                                         args.insert(QStringLiteral("removeBloat"), state->ui.removeBloat);
+                                                         args.insert(QStringLiteral("disableCopilot"), state->ui.disableCopilot);
+                                                         queueGuardedAction(state,
+                                                                            QStringLiteral("Aggressive Optimization"),
+                                                                            QStringLiteral(
+                                                                                "Run aggressive optimization options?"),
+                                                                            QStringLiteral("run_aggressive_optimization"),
+                                                                            args,
+                                                                            ActionKind::Optimize,
+                                                                            false);
+                                                     }
+                                                 });
+                voidcare::app::theme::SettingRow("Gaming boost",
+                                                 "Enable or revert",
+                                                 [&]() {
+                                                     if (ImGui::Button("Enable##dashboard_game", ImVec2(84.0f, 32.0f))) {
+                                                         queueGuardedAction(state,
+                                                                            QStringLiteral("Enable Gaming Boost"),
+                                                                            QStringLiteral(
+                                                                                "Apply gaming boost settings?"),
+                                                                            QStringLiteral("enable_gaming_boost"),
+                                                                            {},
+                                                                            ActionKind::None,
+                                                                            false);
+                                                     }
+                                                     ImGui::SameLine();
+                                                     if (ImGui::Button("Revert##dashboard_game", ImVec2(84.0f, 32.0f))) {
+                                                         queueGuardedAction(state,
+                                                                            QStringLiteral("Revert Gaming Boost"),
+                                                                            QStringLiteral(
+                                                                                "Revert gaming boost settings?"),
+                                                                            QStringLiteral("revert_gaming_boost"),
+                                                                            {},
+                                                                            ActionKind::None,
+                                                                            false);
+                                                     }
+                                                 });
+                voidcare::app::theme::SettingRow("Health report",
+                                                 "Refresh system health summary",
+                                                 [&]() {
+                                                     if (ImGui::Button("Refresh##dashboard_health", ImVec2(120.0f, 32.0f))) {
+                                                         submitRequest(state,
+                                                                       QStringLiteral("refresh_health_report"),
+                                                                       {},
+                                                                       ActionKind::None,
+                                                                       false,
+                                                                       false,
+                                                                       {});
+                                                     }
+                                                 });
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Refresh Health", ImVec2(170.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("refresh_health_report"), {}, ActionKind::None, false, false, {});
-            }
-
-            if (ImGui::Button("Open Security Page", ImVec2(170.0f, 34.0f))) {
-                navigateTo(state, voidcare::app::PageId::Security);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Open Optimize Page", ImVec2(170.0f, 34.0f))) {
-                navigateTo(state, voidcare::app::PageId::Optimize);
-            }
-            ImGui::Spacing();
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
             ImGui::TextWrapped("%s", toUtf8(state->ui.snapshot.healthSummary).c_str());
         }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        renderLogsPanel(state, 250.0f, false);
+        voidcare::app::theme::EndPanel();
         ImGui::EndTable();
     }
 }
@@ -857,7 +1101,7 @@ void renderPersistenceTable(RuntimeState* state, const QString& searchNeedle) {
                           5,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
                               ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 235.0f))) {
+                          ImVec2(0.0f, 245.0f))) {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 2.1f);
         ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Publisher", ImGuiTableColumnFlags_WidthStretch, 1.3f);
@@ -913,7 +1157,7 @@ void renderSuspiciousAndQuarantineTables(RuntimeState* state, const QString& sea
                           5,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
                               ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 185.0f))) {
+                          ImVec2(0.0f, 170.0f))) {
         ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 2.6f);
         ImGui::TableSetupColumn("Score", ImGuiTableColumnFlags_WidthFixed, 62.0f);
         ImGui::TableSetupColumn("Signature", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -961,7 +1205,7 @@ void renderSuspiciousAndQuarantineTables(RuntimeState* state, const QString& sea
                           4,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
                               ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 130.0f))) {
+                          ImVec2(0.0f, 125.0f))) {
         ImGui::TableSetupColumn("Quarantine Path", ImGuiTableColumnFlags_WidthStretch, 2.0f);
         ImGui::TableSetupColumn("Original Path", ImGuiTableColumnFlags_WidthStretch, 1.8f);
         ImGui::TableSetupColumn("SHA256", ImGuiTableColumnFlags_WidthStretch, 1.6f);
@@ -1004,105 +1248,78 @@ void renderSecurity(RuntimeState* state, const QString& searchNeedle) {
         return;
     }
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.19f, 0.13f, 0.34f, 0.86f));
-    ImGui::BeginChild("security_warning", ImVec2(0.0f, 42.0f), true);
-    ImGui::TextColored(ImVec4(0.94f, 0.92f, 1.0f, 1.0f), "%s", kWarningText);
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
+    voidcare::app::theme::StatusChip(kWarningText, voidcare::app::theme::ChipVariant::Warning);
     ImGui::Spacing();
 
-    const bool twoColumns = ImGui::GetContentRegionAvail().x > 1180.0f;
-    if (ImGui::BeginTable("security_cards",
-                          twoColumns ? 2 : 1,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+    if (ImGui::BeginTable(
+            "security_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("defender_scans_card", ImVec2(0.0f, 320.0f))) {
-            voidcare::app::theme::cardHeader("Defender Scans", "Quick / Full / Custom");
-            if (state->ui.snapshot.defenderScanAvailable) {
-                drawStatusChip("Defender Available",
-                               ImVec4(0.27f, 0.21f, 0.56f, 1.0f),
-                               ImVec4(0.96f, 0.95f, 1.0f, 1.0f));
-            } else {
-                drawStatusChip("Defender Unavailable",
-                               ImVec4(0.39f, 0.18f, 0.22f, 1.0f),
-                               ImVec4(1.0f, 0.87f, 0.87f, 1.0f));
+        if (voidcare::app::theme::BeginPanel(
+                "security_left_panel", "Security", ImVec2(0.0f, 0.0f), "Defender + persistence")) {
+            if (voidcare::app::theme::BeginSettingRows("security_left_rows")) {
+                voidcare::app::theme::SettingRow("Provider status",
+                                                 "Active, passive, or unavailable",
+                                                 [&]() { renderProviderStatusChip(state->ui.snapshot); });
+                voidcare::app::theme::SettingRow("Provider", "Detected antivirus", [&]() {
+                    ImGui::TextUnformatted(toShortUtf8(state->ui.snapshot.antivirusProviderName, 36).c_str());
+                });
+                voidcare::app::theme::SettingRow("Custom scan path", "Path for Defender custom scan", [&]() {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##custom_scan_path", state->customScanPath.data(), state->customScanPath.size());
+                });
+                voidcare::app::theme::SettingRow("Scan controls", "Quick / Full / Custom", [&]() {
+                    const bool disabled = !state->ui.snapshot.defenderScanAvailable;
+                    if (disabled) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Quick##security", ImVec2(74.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("run_defender_quick_scan"), {}, ActionKind::Scan, false, false, {});
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Full##security", ImVec2(74.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("run_defender_full_scan"), {}, ActionKind::Scan, false, false, {});
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Custom##security", ImVec2(86.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("customPath"), QString::fromUtf8(state->customScanPath.data()).trimmed());
+                        submitRequest(state, QStringLiteral("run_defender_custom_scan"), args, ActionKind::Scan, false, false, {});
+                    }
+                    if (disabled) {
+                        ImGui::EndDisabled();
+                    }
+                });
+                voidcare::app::theme::SettingRow("Auto-remediate", "Defender detections only", [&]() {
+                    const bool disabled = !state->ui.snapshot.defenderRemediationAvailable;
+                    if (disabled) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Run##security_remediate", ImVec2(120.0f, 32.0f))) {
+                        submitRequest(state,
+                                      QStringLiteral("run_defender_auto_remediate"),
+                                      {},
+                                      ActionKind::Scan,
+                                      false,
+                                      false,
+                                      {});
+                    }
+                    if (disabled) {
+                        ImGui::EndDisabled();
+                    }
+                });
             }
-            ImGui::Spacing();
-            ImGui::TextWrapped("%s", toUtf8(state->ui.snapshot.antivirusStatus).c_str());
-            ImGui::InputTextWithHint("##custom_scan_path",
-                                     "Custom path for Defender custom scan",
-                                     state->customScanPath.data(),
-                                     state->customScanPath.size());
-
-            if (!state->ui.snapshot.defenderScanAvailable) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Quick Scan", ImVec2(120.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("run_defender_quick_scan"), {}, ActionKind::Scan, false, false, {});
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Full Scan", ImVec2(120.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("run_defender_full_scan"), {}, ActionKind::Scan, false, false, {});
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Custom Scan", ImVec2(120.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("customPath"), QString::fromUtf8(state->customScanPath.data()).trimmed());
-                submitRequest(state, QStringLiteral("run_defender_custom_scan"), args, ActionKind::Scan, false, false, {});
-            }
-            if (!state->ui.snapshot.defenderScanAvailable) {
-                ImGui::EndDisabled();
-            }
-            if (!state->ui.snapshot.defenderRemediationAvailable) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Auto-Remediate", ImVec2(150.0f, 34.0f))) {
-                submitRequest(state,
-                              QStringLiteral("run_defender_auto_remediate"),
-                              {},
-                              ActionKind::Scan,
-                              false,
-                              false,
-                              {});
-            }
-            if (!state->ui.snapshot.defenderRemediationAvailable) {
-                ImGui::EndDisabled();
-            }
-
-            if (state->ui.snapshot.externalScannerAvailable) {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.66f, 0.66f, 0.78f, 1.0f), "External Scanner (Session Only)");
-                ImGui::InputTextWithHint("##external_exe", "Executable path", state->externalScannerExe.data(), state->externalScannerExe.size());
-                ImGui::InputTextWithHint("##external_args", "Arguments", state->externalScannerArgs.data(), state->externalScannerArgs.size());
-                if (ImGui::Button("Configure External", ImVec2(150.0f, 34.0f))) {
-                    QVariantMap args;
-                    args.insert(QStringLiteral("executable"), QString::fromUtf8(state->externalScannerExe.data()).trimmed());
-                    args.insert(QStringLiteral("argsLine"), QString::fromUtf8(state->externalScannerArgs.data()).trimmed());
-                    submitRequest(state, QStringLiteral("configure_external_scanner"), args, ActionKind::None, false, false, {});
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Run External", ImVec2(130.0f, 34.0f))) {
-                    submitRequest(state, QStringLiteral("run_external_scanner"), {}, ActionKind::Scan, false, false, {});
-                }
-            }
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("persistence_card", ImVec2(0.0f, 320.0f))) {
-            voidcare::app::theme::cardHeader("Persistence Audit", "Startup folders, Run keys, tasks, services");
-            if (ImGui::Button("Refresh Audit", ImVec2(130.0f, 34.0f))) {
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
+            if (ImGui::Button("Refresh Audit##security", ImVec2(120.0f, 32.0f))) {
                 submitRequest(state, QStringLiteral("refresh_persistence_audit"), {}, ActionKind::None, false, false, {});
             }
             ImGui::SameLine();
-            const bool hasSelection =
-                state->ui.selectedPersistenceIndex >= 0 &&
-                state->ui.selectedPersistenceIndex < state->ui.snapshot.persistenceEntries.size();
+            const bool hasSelection = state->ui.selectedPersistenceIndex >= 0 &&
+                                      state->ui.selectedPersistenceIndex < state->ui.snapshot.persistenceEntries.size();
             if (!hasSelection) {
                 ImGui::BeginDisabled();
             }
-            if (ImGui::Button("Disable Selected", ImVec2(150.0f, 34.0f))) {
+            if (ImGui::Button("Disable Selected##security", ImVec2(150.0f, 32.0f))) {
                 const auto& row = state->ui.snapshot.persistenceEntries[state->ui.selectedPersistenceIndex];
                 QVariantMap args;
                 args.insert(QStringLiteral("entryId"), row.id);
@@ -1120,81 +1337,80 @@ void renderSecurity(RuntimeState* state, const QString& searchNeedle) {
             ImGui::Spacing();
             renderPersistenceTable(state, searchNeedle);
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
 
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("suspicious_card", ImVec2(0.0f, 380.0f))) {
-            voidcare::app::theme::cardHeader("Suspicious Files", "Heuristic highlight only, quarantine-first");
-            ImGui::InputTextWithHint("##full_scan_roots",
-                                     "Full scan roots (semicolon-separated)",
-                                     state->fullScanRoots.data(),
-                                     state->fullScanRoots.size());
-            if (ImGui::Button("Quick Scan", ImVec2(120.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("run_quick_suspicious_scan"), {}, ActionKind::Scan, false, false, {});
+        if (voidcare::app::theme::BeginPanel(
+                "security_right_panel", "Suspicious Files", ImVec2(0.0f, 0.0f), "Quarantine-first workflow")) {
+            if (voidcare::app::theme::BeginSettingRows("security_right_rows")) {
+                voidcare::app::theme::SettingRow("Full scan roots", "Semicolon separated paths", [&]() {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##full_scan_roots", state->fullScanRoots.data(), state->fullScanRoots.size());
+                });
+                voidcare::app::theme::SettingRow("Suspicious scan", "Quick or full", [&]() {
+                    if (ImGui::Button("Quick##security_suspicious", ImVec2(86.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("run_quick_suspicious_scan"), {}, ActionKind::Scan, false, false, {});
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Full##security_suspicious", ImVec2(86.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("roots"), splitRoots(QString::fromUtf8(state->fullScanRoots.data()).trimmed()));
+                        submitRequest(state, QStringLiteral("run_full_suspicious_scan"), args, ActionKind::Scan, false, false, {});
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Refresh##security_suspicious", ImVec2(94.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("get_state"), {}, ActionKind::None, false, false, {});
+                    }
+                });
+                voidcare::app::theme::SettingRow("Restore destination", "Optional destination override", [&]() {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##restore_destination", state->restoreDestination.data(), state->restoreDestination.size());
+                });
+                voidcare::app::theme::SettingRow("Actions", "Quarantine, restore, delete", [&]() {
+                    if (ImGui::Button("Quarantine##security_action", ImVec2(96.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("filePaths"), setToStringList(state->ui.selectedSuspicious));
+                        queueGuardedAction(state,
+                                           QStringLiteral("Quarantine Suspicious Files"),
+                                           QStringLiteral("Move selected suspicious files to quarantine?"),
+                                           QStringLiteral("quarantine_selected"),
+                                           args,
+                                           ActionKind::None,
+                                           false);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Restore##security_action", ImVec2(80.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("quarantinePaths"), setToStringList(state->ui.selectedQuarantine));
+                        args.insert(QStringLiteral("destinationOverride"), QString::fromUtf8(state->restoreDestination.data()).trimmed());
+                        submitRequest(state, QStringLiteral("restore_quarantined"), args, ActionKind::None, false, false, {});
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Delete##security_action", ImVec2(78.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("quarantinePaths"), setToStringList(state->ui.selectedQuarantine));
+                        queueGuardedAction(state,
+                                           QStringLiteral("Delete Quarantined Files"),
+                                           QStringLiteral("Permanently delete selected quarantined files? This cannot be undone."),
+                                           QStringLiteral("delete_quarantined"),
+                                           args,
+                                           ActionKind::None,
+                                           false);
+                    }
+                });
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Full Scan", ImVec2(120.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("roots"),
-                            splitRoots(QString::fromUtf8(state->fullScanRoots.data()).trimmed()));
-                submitRequest(state, QStringLiteral("run_full_suspicious_scan"), args, ActionKind::Scan, false, false, {});
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Refresh Quarantine", ImVec2(150.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("get_state"), {}, ActionKind::None, false, false, {});
-            }
+            voidcare::app::theme::EndSettingRows();
             ImGui::Spacing();
-
             renderSuspiciousAndQuarantineTables(state, searchNeedle);
-
-            if (ImGui::Button("Quarantine Selected", ImVec2(170.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("filePaths"), setToStringList(state->ui.selectedSuspicious));
-                queueGuardedAction(state,
-                                   QStringLiteral("Quarantine Suspicious Files"),
-                                   QStringLiteral("Move selected suspicious files to quarantine?"),
-                                   QStringLiteral("quarantine_selected"),
-                                   args,
-                                   ActionKind::None,
-                                   false);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Clear Suspicious Selection", ImVec2(190.0f, 34.0f))) {
+            if (ImGui::Button("Clear Suspicious Selection##security", ImVec2(190.0f, 30.0f))) {
                 state->ui.selectedSuspicious.clear();
             }
-            ImGui::Spacing();
-            ImGui::InputTextWithHint("##restore_destination",
-                                     "Restore destination override (optional)",
-                                     state->restoreDestination.data(),
-                                     state->restoreDestination.size());
-            if (ImGui::Button("Restore Selected", ImVec2(150.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("quarantinePaths"), setToStringList(state->ui.selectedQuarantine));
-                args.insert(QStringLiteral("destinationOverride"),
-                            QString::fromUtf8(state->restoreDestination.data()).trimmed());
-                submitRequest(state, QStringLiteral("restore_quarantined"), args, ActionKind::None, false, false, {});
-            }
             ImGui::SameLine();
-            if (ImGui::Button("Delete Permanently", ImVec2(170.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("quarantinePaths"), setToStringList(state->ui.selectedQuarantine));
-                queueGuardedAction(state,
-                                   QStringLiteral("Delete Quarantined Files"),
-                                   QStringLiteral("Permanently delete selected quarantined files? This cannot be undone."),
-                                   QStringLiteral("delete_quarantined"),
-                                   args,
-                                   ActionKind::None,
-                                   false);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Clear Quarantine Selection", ImVec2(190.0f, 34.0f))) {
+            if (ImGui::Button("Clear Quarantine Selection##security", ImVec2(190.0f, 30.0f))) {
                 state->ui.selectedQuarantine.clear();
             }
         }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        renderLogsPanel(state, 380.0f, true);
+        voidcare::app::theme::EndPanel();
         ImGui::EndTable();
     }
 }
@@ -1204,68 +1420,99 @@ void renderOptimize(RuntimeState* state) {
         return;
     }
 
-    const bool twoColumns = ImGui::GetContentRegionAvail().x > 1120.0f;
-    if (ImGui::BeginTable("optimize_cards",
-                          twoColumns ? 2 : 1,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+    if (ImGui::BeginTable(
+            "optimize_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("safe_opt_card", ImVec2(0.0f, 245.0f))) {
-            voidcare::app::theme::cardHeader("Safe Optimization", "Temp cleanup and recycle bin");
-            ImGui::TextWrapped("Safe actions still require confirmation and restore-point attempt.");
-            if (ImGui::Button("Run Safe Cleanup", ImVec2(170.0f, 34.0f))) {
-                queueGuardedAction(state,
-                                   QStringLiteral("Safe Optimization"),
-                                   QStringLiteral("Run safe cleanup now?"),
-                                   QStringLiteral("run_safe_optimization"),
-                                   {},
-                                   ActionKind::Optimize,
-                                   false);
+        if (voidcare::app::theme::BeginPanel(
+                "optimize_left_panel", "Optimization", ImVec2(0.0f, 0.0f), "Safe and aggressive controls")) {
+            if (voidcare::app::theme::BeginSettingRows("optimize_left_rows")) {
+                voidcare::app::theme::SettingRow("Performance preset", "Session-only preset", [&]() {
+                    voidcare::app::theme::togglePill("optimize_perf_toggle", &state->performancePreset, ImVec2(72.0f, 32.0f));
+                });
+                voidcare::app::theme::SettingRow("Safe cleanup", "Temp and recycle cleanup", [&]() {
+                    if (ImGui::Button("Run##optimize_safe", ImVec2(120.0f, 32.0f))) {
+                        queueGuardedAction(state,
+                                           QStringLiteral("Safe Optimization"),
+                                           QStringLiteral("Run safe cleanup now?"),
+                                           QStringLiteral("run_safe_optimization"),
+                                           {},
+                                           ActionKind::Optimize,
+                                           false);
+                    }
+                });
+                voidcare::app::theme::SettingRow("Remove bloat", "Aggressive option", [&]() {
+                    voidcare::app::theme::togglePill("optimize_remove_bloat", &state->ui.removeBloat, ImVec2(72.0f, 32.0f));
+                });
+                voidcare::app::theme::SettingRow("Disable Copilot", "Aggressive option", [&]() {
+                    voidcare::app::theme::togglePill("optimize_disable_copilot", &state->ui.disableCopilot, ImVec2(72.0f, 32.0f));
+                });
+                voidcare::app::theme::SettingRow("Aggressive run", "Run selected aggressive options", [&]() {
+                    if (ImGui::Button("Run##optimize_aggressive", ImVec2(120.0f, 32.0f))) {
+                        QVariantMap args;
+                        args.insert(QStringLiteral("removeBloat"), state->ui.removeBloat);
+                        args.insert(QStringLiteral("disableCopilot"), state->ui.disableCopilot);
+                        queueGuardedAction(state,
+                                           QStringLiteral("Aggressive Optimization"),
+                                           QStringLiteral("Run aggressive optimization options?"),
+                                           QStringLiteral("run_aggressive_optimization"),
+                                           args,
+                                           ActionKind::Optimize,
+                                           false);
+                    }
+                });
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Refresh Health", ImVec2(140.0f, 34.0f))) {
-                submitRequest(state, QStringLiteral("refresh_health_report"), {}, ActionKind::None, false, false, {});
-            }
-            ImGui::Spacing();
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
             ImGui::TextWrapped("%s", toUtf8(state->ui.snapshot.healthSummary).c_str());
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
 
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("aggressive_opt_card", ImVec2(0.0f, 245.0f))) {
-            voidcare::app::theme::cardHeader("Aggressive Optimization", "Optional and reversible guidance");
-            ImGui::Checkbox("Remove selected bloat packages", &state->ui.removeBloat);
-            ImGui::Checkbox("Disable Copilot (best-effort)", &state->ui.disableCopilot);
-            if (ImGui::Button("Run Aggressive", ImVec2(170.0f, 34.0f))) {
-                QVariantMap args;
-                args.insert(QStringLiteral("removeBloat"), state->ui.removeBloat);
-                args.insert(QStringLiteral("disableCopilot"), state->ui.disableCopilot);
-                queueGuardedAction(state,
-                                   QStringLiteral("Aggressive Optimization"),
-                                   QStringLiteral("Run aggressive optimization options?"),
-                                   QStringLiteral("run_aggressive_optimization"),
-                                   args,
-                                   ActionKind::Optimize,
-                                   false);
+        if (voidcare::app::theme::BeginPanel(
+                "optimize_right_panel", "Companion Panel", ImVec2(0.0f, 0.0f), "Gaming and startup helpers")) {
+            if (voidcare::app::theme::BeginSettingRows("optimize_right_rows")) {
+                voidcare::app::theme::SettingRow("Gaming boost", "Enable or revert profile", [&]() {
+                    if (ImGui::Button("Enable##optimize_game", ImVec2(84.0f, 32.0f))) {
+                        queueGuardedAction(state,
+                                           QStringLiteral("Enable Gaming Boost"),
+                                           QStringLiteral("Apply gaming boost settings?"),
+                                           QStringLiteral("enable_gaming_boost"),
+                                           {},
+                                           ActionKind::None,
+                                           false);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Revert##optimize_game", ImVec2(84.0f, 32.0f))) {
+                        queueGuardedAction(state,
+                                           QStringLiteral("Revert Gaming Boost"),
+                                           QStringLiteral("Revert gaming boost settings?"),
+                                           QStringLiteral("revert_gaming_boost"),
+                                           {},
+                                           ActionKind::None,
+                                           false);
+                    }
+                });
+                voidcare::app::theme::SettingRow("Startup manager", "Open Security page", [&]() {
+                    if (ImGui::Button("Open##optimize_security", ImVec2(120.0f, 32.0f))) {
+                        navigateTo(state, voidcare::app::PageId::Security);
+                    }
+                });
+                voidcare::app::theme::SettingRow("Refresh health", "Re-pull health summary", [&]() {
+                    if (ImGui::Button("Refresh##optimize_health", ImVec2(120.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("refresh_health_report"), {}, ActionKind::None, false, false, {});
+                    }
+                });
+                voidcare::app::theme::SettingRow("Session", "Pending actions", [&]() {
+                    ImGui::Text("%d pending", state->pendingCount);
+                });
             }
-            ImGui::TextColored(ImVec4(0.67f, 0.67f, 0.78f, 1.0f),
-                               "Unchecked by default. Use restore point if you need to revert.");
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        renderLogsPanel(state, 300.0f, true);
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("optimization_tips_card", ImVec2(0.0f, 300.0f))) {
-            voidcare::app::theme::cardHeader("Current Session", "Quick status");
-            ImGui::Text("Pending jobs: %d", state->pendingCount);
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
             ImGui::Text("Last optimize: %s", toUtf8(state->lastOptimizeStamp).c_str());
             ImGui::Text("Discord RPC: %s", boolText(state->ui.discordToggle));
-            ImGui::Spacing();
             ImGui::TextWrapped("%s", toUtf8(state->ui.statusText).c_str());
         }
-        voidcare::app::theme::endCard();
-
+        voidcare::app::theme::EndPanel();
         ImGui::EndTable();
     }
 }
@@ -1280,66 +1527,70 @@ void renderGaming(RuntimeState* state) {
     static bool disableNotifications = true;
     static bool disableGameDvr = true;
 
-    const bool twoColumns = ImGui::GetContentRegionAvail().x > 1120.0f;
-    if (ImGui::BeginTable("gaming_cards",
-                          twoColumns ? 2 : 1,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+    if (ImGui::BeginTable(
+            "gaming_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("gaming_core_card", ImVec2(0.0f, 250.0f))) {
-            voidcare::app::theme::cardHeader("Gaming Boost", "High performance plan + safe toggles");
-            if (ImGui::Button("Enable Gaming Boost", ImVec2(185.0f, 34.0f))) {
-                queueGuardedAction(state,
-                                   QStringLiteral("Enable Gaming Boost"),
-                                   QStringLiteral("Apply gaming boost settings?"),
-                                   QStringLiteral("enable_gaming_boost"),
-                                   {},
-                                   ActionKind::None,
-                                   false);
+        if (voidcare::app::theme::BeginPanel(
+                "gaming_left_panel", "Gaming", ImVec2(0.0f, 0.0f), "Boost actions and safety guidance")) {
+            if (voidcare::app::theme::BeginSettingRows("gaming_left_rows")) {
+                voidcare::app::theme::SettingRow("Enable boost", "Apply gaming profile", [&]() {
+                    if (ImGui::Button("Enable##gaming", ImVec2(86.0f, 32.0f))) {
+                        queueGuardedAction(state,
+                                           QStringLiteral("Enable Gaming Boost"),
+                                           QStringLiteral("Apply gaming boost settings?"),
+                                           QStringLiteral("enable_gaming_boost"),
+                                           {},
+                                           ActionKind::None,
+                                           false);
+                    }
+                });
+                voidcare::app::theme::SettingRow("Revert boost", "Revert gaming profile", [&]() {
+                    if (ImGui::Button("Revert##gaming", ImVec2(86.0f, 32.0f))) {
+                        queueGuardedAction(state,
+                                           QStringLiteral("Revert Gaming Boost"),
+                                           QStringLiteral("Revert gaming boost settings?"),
+                                           QStringLiteral("revert_gaming_boost"),
+                                           {},
+                                           ActionKind::None,
+                                           false);
+                    }
+                });
+                voidcare::app::theme::SettingRow("Safety", "Restore-point attempt enabled", [&]() {
+                    voidcare::app::theme::StatusChip("Guarded", voidcare::app::theme::ChipVariant::Success);
+                });
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Revert Boost", ImVec2(150.0f, 34.0f))) {
-                queueGuardedAction(state,
-                                   QStringLiteral("Revert Gaming Boost"),
-                                   QStringLiteral("Revert gaming boost settings?"),
-                                   QStringLiteral("revert_gaming_boost"),
-                                   {},
-                                   ActionKind::None,
-                                   false);
-            }
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.78f, 1.0f), "Guidance");
-            ImGui::BulletText("Use revert if game-specific power settings cause issues.");
-            ImGui::BulletText("Restore points are attempted before applying changes.");
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("gaming_toggles_card", ImVec2(0.0f, 250.0f))) {
-            voidcare::app::theme::cardHeader("Session Tweaks", "UI-only preset controls");
-            ImGui::Text("Frame limiter");
-            voidcare::app::theme::sliderBar("frame_limiter", &frameLimit, 60.0f, 240.0f, "%.0f FPS");
-            ImGui::Text("Image sharpness");
-            voidcare::app::theme::sliderBar("image_sharpness", &sharpness, 0.0f, 100.0f, "%.0f%%");
-            ImGui::Text("Disable notifications");
-            voidcare::app::theme::togglePill("disable_notifications", &disableNotifications, ImVec2(66.0f, 30.0f));
-            ImGui::Text("Disable Game DVR");
-            voidcare::app::theme::togglePill("disable_gamedvr", &disableGameDvr, ImVec2(66.0f, 30.0f));
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        renderLogsPanel(state, 300.0f, false);
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("gaming_stats_card", ImVec2(0.0f, 300.0f))) {
-            voidcare::app::theme::cardHeader("Runtime Stats", "Quick view");
-            ImGui::Text("CPU: %.1f%%", state->cpuPercent);
-            ImGui::Text("RAM: %.1f%%", state->ramPercent);
-            ImGui::Text("Disk: %.1f%%", state->diskPercent);
+            voidcare::app::theme::EndSettingRows();
             ImGui::Separator();
+            ImGui::BulletText("Use Revert if game-specific settings conflict.");
+            ImGui::BulletText("Boost and revert keep destructive-flow confirmations.");
+        }
+        voidcare::app::theme::EndPanel();
+
+        ImGui::TableNextColumn();
+        if (voidcare::app::theme::BeginPanel(
+                "gaming_right_panel", "Companion Panel", ImVec2(0.0f, 0.0f), "Session tuning controls")) {
+            if (voidcare::app::theme::BeginSettingRows("gaming_right_rows")) {
+                voidcare::app::theme::SettingRow("Frame limiter", "UI-only session knob", [&]() {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    voidcare::app::theme::sliderBar("frame_limiter", &frameLimit, 60.0f, 240.0f, "%.0f FPS");
+                });
+                voidcare::app::theme::SettingRow("Image sharpness", "UI-only session knob", [&]() {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    voidcare::app::theme::sliderBar("image_sharpness", &sharpness, 0.0f, 100.0f, "%.0f%%");
+                });
+                voidcare::app::theme::SettingRow("Disable notifications", "Session preference", [&]() {
+                    voidcare::app::theme::togglePill("disable_notifications", &disableNotifications, ImVec2(72.0f, 32.0f));
+                });
+                voidcare::app::theme::SettingRow("Disable Game DVR", "Session preference", [&]() {
+                    voidcare::app::theme::togglePill("disable_gamedvr", &disableGameDvr, ImVec2(72.0f, 32.0f));
+                });
+            }
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
+            ImGui::Text("CPU %.1f%% | RAM %.1f%% | Disk %.1f%%", state->cpuPercent, state->ramPercent, state->diskPercent);
             ImGui::TextWrapped("%s", toUtf8(state->ui.statusText).c_str());
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
         ImGui::EndTable();
     }
 }
@@ -1349,49 +1600,77 @@ void renderApps(RuntimeState* state, const QString& searchNeedle) {
         return;
     }
 
-    if (voidcare::app::theme::beginCard("apps_inventory_card", ImVec2(0.0f, 520.0f))) {
-        voidcare::app::theme::cardHeader("Apps Manager", "Inventory and launchers only");
-        if (ImGui::Button("Refresh Apps", ImVec2(130.0f, 34.0f))) {
-            submitRequest(state, QStringLiteral("refresh_installed_apps"), {}, ActionKind::None, false, false, {});
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Open Apps Settings", ImVec2(165.0f, 34.0f))) {
-            submitRequest(state, QStringLiteral("open_apps_settings"), {}, ActionKind::None, false, false, {});
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Open Programs && Features", ImVec2(205.0f, 34.0f))) {
-            submitRequest(state, QStringLiteral("open_programs_features"), {}, ActionKind::None, false, false, {});
-        }
-
-        ImGui::Spacing();
-        if (ImGui::BeginTable("apps_table",
-                              3,
-                              ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
-                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                              ImVec2(0.0f, 410.0f))) {
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.8f);
-            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthStretch, 0.8f);
-            ImGui::TableSetupColumn("Publisher", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-            ImGui::TableHeadersRow();
-
-            for (int i = 0; i < state->ui.snapshot.installedApps.size(); ++i) {
-                const auto& row = state->ui.snapshot.installedApps[i];
-                if (!containsSearch(row.name + QStringLiteral(" ") + row.publisher, searchNeedle)) {
-                    continue;
-                }
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(toShortUtf8(row.name, 66).c_str());
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(toShortUtf8(row.version, 24).c_str());
-                ImGui::TableSetColumnIndex(2);
-                ImGui::TextUnformatted(toShortUtf8(row.publisher, 40).c_str());
+    if (ImGui::BeginTable(
+            "apps_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+        ImGui::TableNextColumn();
+        if (voidcare::app::theme::BeginPanel("apps_left_panel",
+                                             "Apps Manager",
+                                             ImVec2(0.0f, 0.0f),
+                                             "Inventory and launchers only")) {
+            if (ImGui::Button("Refresh Apps##apps", ImVec2(130.0f, 32.0f))) {
+                submitRequest(state, QStringLiteral("refresh_installed_apps"), {}, ActionKind::None, false, false, {});
             }
+            ImGui::Spacing();
+            if (ImGui::BeginTable("apps_table",
+                                  3,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
+                                      ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+                                  ImVec2(0.0f, 0.0f))) {
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.8f);
+                ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+                ImGui::TableSetupColumn("Publisher", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+                ImGui::TableHeadersRow();
 
-            ImGui::EndTable();
+                for (int i = 0; i < state->ui.snapshot.installedApps.size(); ++i) {
+                    const auto& row = state->ui.snapshot.installedApps[i];
+                    if (!containsSearch(row.name + QStringLiteral(" ") + row.publisher, searchNeedle)) {
+                        continue;
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(toShortUtf8(row.name, 66).c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(toShortUtf8(row.version, 24).c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(toShortUtf8(row.publisher, 40).c_str());
+                }
+                ImGui::EndTable();
+            }
         }
+        voidcare::app::theme::EndPanel();
+
+        ImGui::TableNextColumn();
+        if (voidcare::app::theme::BeginPanel(
+                "apps_right_panel", "Companion Panel", ImVec2(0.0f, 0.0f), "External launchers and status")) {
+            if (voidcare::app::theme::BeginSettingRows("apps_rows")) {
+                voidcare::app::theme::SettingRow("Open Apps Settings", "Windows settings launcher", [&]() {
+                    if (ImGui::Button("Open##apps_settings", ImVec2(120.0f, 32.0f))) {
+                        submitRequest(state, QStringLiteral("open_apps_settings"), {}, ActionKind::None, false, false, {});
+                    }
+                });
+                voidcare::app::theme::SettingRow("Programs && Features", "Classic control panel", [&]() {
+                    if (ImGui::Button("Open##programs_features", ImVec2(120.0f, 32.0f))) {
+                        submitRequest(state,
+                                      QStringLiteral("open_programs_features"),
+                                      {},
+                                      ActionKind::None,
+                                      false,
+                                      false,
+                                      {});
+                    }
+                });
+                voidcare::app::theme::SettingRow("Inventory size", "Current app rows", [&]() {
+                    ImGui::Text("%d apps", state->ui.snapshot.installedApps.size());
+                });
+            }
+            voidcare::app::theme::EndSettingRows();
+            ImGui::Separator();
+            ImGui::TextWrapped("Apps page is inventory + launcher only. No uninstall action is executed.");
+            ImGui::TextWrapped("%s", toUtf8(state->ui.statusText).c_str());
+        }
+        voidcare::app::theme::EndPanel();
+        ImGui::EndTable();
     }
-    voidcare::app::theme::endCard();
 }
 
 void renderAbout(RuntimeState* state) {
@@ -1399,46 +1678,51 @@ void renderAbout(RuntimeState* state) {
         return;
     }
 
-    const bool twoColumns = ImGui::GetContentRegionAvail().x > 1020.0f;
-    if (ImGui::BeginTable("about_cards",
-                          twoColumns ? 2 : 1,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+    if (ImGui::BeginTable(
+            "about_two_panel", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("about_main_card", ImVec2(0.0f, 260.0f))) {
-            voidcare::app::theme::cardHeader("VoidCare", "Offline admin optimization and security suite");
+        if (voidcare::app::theme::BeginPanel("about_left_panel",
+                                             "About VoidCare",
+                                             ImVec2(0.0f, 0.0f),
+                                             "Offline admin optimization and security suite")) {
             ImGui::TextWrapped("VoidCare by VoidTools");
             ImGui::TextWrapped("%s", kCreditsText);
             ImGui::Separator();
             ImGui::TextWrapped("Admin-only, offline-only operation.");
             ImGui::TextWrapped("Defender-only auto-remediation. Suspicious scanning is heuristic-only.");
+            ImGui::TextWrapped("Suspicious != confirmed malware. Review before deleting.");
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
 
         ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("about_discord_card", ImVec2(0.0f, 260.0f))) {
-            voidcare::app::theme::cardHeader("Discord Rich Presence", "Local IPC named pipes only");
-            ImGui::Text("Current state: %s", boolText(state->ui.discordToggle));
-            ImGui::TextWrapped("%s", toUtf8(state->ui.snapshot.discordAboutStatus).c_str());
-            ImGui::Spacing();
-            ImGui::TextWrapped("Pipes: \\\\?\\pipe\\discord-ipc-0..9");
-            ImGui::TextWrapped("No web calls are used.");
-        }
-        voidcare::app::theme::endCard();
-
-        ImGui::TableNextColumn();
-        renderLogsPanel(state, 280.0f, false);
-
-        ImGui::TableNextColumn();
-        if (voidcare::app::theme::beginCard("about_status_card", ImVec2(0.0f, 280.0f))) {
-            voidcare::app::theme::cardHeader("Session Status", "Runtime details");
-            ImGui::Text("Pending jobs: %d", state->pendingCount);
-            ImGui::Text("Current page: %s", pageName(state->ui.page));
-            ImGui::Text("Last scan: %s", toUtf8(state->lastScanStamp).c_str());
-            ImGui::Text("Last optimize: %s", toUtf8(state->lastOptimizeStamp).c_str());
+        if (voidcare::app::theme::BeginPanel(
+                "about_right_panel", "Discord RPC", ImVec2(0.0f, 0.0f), "Local IPC named pipes only")) {
+            if (voidcare::app::theme::BeginSettingRows("about_rows")) {
+                voidcare::app::theme::SettingRow("Current state", "Session RPC toggle", [&]() {
+                    ImGui::Text("%s", boolText(state->ui.discordToggle));
+                });
+                voidcare::app::theme::SettingRow("Discord status", "Desktop client detection", [&]() {
+                    ImGui::TextUnformatted(toShortUtf8(state->ui.snapshot.discordAboutStatus, 56).c_str());
+                });
+                voidcare::app::theme::SettingRow("Pipe range", "discord-ipc-0..9", [&]() {
+                    ImGui::TextUnformatted("\\\\?\\pipe\\discord-ipc-*");
+                });
+                voidcare::app::theme::SettingRow("Session pending", "Active jobs", [&]() {
+                    ImGui::Text("%d", state->pendingCount);
+                });
+                voidcare::app::theme::SettingRow("Last scan", "Timestamp", [&]() {
+                    ImGui::TextUnformatted(toUtf8(state->lastScanStamp).c_str());
+                });
+                voidcare::app::theme::SettingRow("Last optimize", "Timestamp", [&]() {
+                    ImGui::TextUnformatted(toUtf8(state->lastOptimizeStamp).c_str());
+                });
+            }
+            voidcare::app::theme::EndSettingRows();
             ImGui::Separator();
+            ImGui::TextWrapped("No web calls are used. RPC communicates over local named pipes.");
             ImGui::TextWrapped("%s", toUtf8(state->ui.statusText).c_str());
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
         ImGui::EndTable();
     }
 }
@@ -1530,7 +1814,7 @@ void renderTopBar(RuntimeState* state, const char* searchIcon, const char* confi
         return;
     }
 
-    if (voidcare::app::theme::beginCard("topbar_card", ImVec2(0.0f, 74.0f))) {
+    if (voidcare::app::theme::BeginPanel("topbar_panel", nullptr, ImVec2(0.0f, 74.0f))) {
         drawSearchBox(state, searchIcon);
         ImGui::SameLine();
         static const char* configs[] = {"New Config 1", "Performance", "Balanced"};
@@ -1551,7 +1835,7 @@ void renderTopBar(RuntimeState* state, const char* searchIcon, const char* confi
             submitRequest(state, QStringLiteral("set_discord_enabled"), args, ActionKind::None, false, false, {});
         }
     }
-    voidcare::app::theme::endCard();
+    voidcare::app::theme::EndPanel();
 }
 
 void renderSidebar(RuntimeState* state,
@@ -1561,10 +1845,18 @@ void renderSidebar(RuntimeState* state,
         return;
     }
 
-    if (voidcare::app::theme::beginCard("sidebar_card", ImVec2(88.0f, 0.0f))) {
-        ImGui::SetCursorPosY(18.0f);
-        ImGui::SetCursorPosX(28.0f);
-        ImGui::TextColored(ImVec4(0.56f, 0.49f, 1.0f, 1.0f), "VC");
+    ensureSidebarLogoLoaded(state);
+
+    if (voidcare::app::theme::BeginPanel("sidebar_panel", nullptr, ImVec2(88.0f, 0.0f))) {
+        ImGui::SetCursorPosY(14.0f);
+        if (state->logoTexture != nullptr && state->logoWidth > 0 && state->logoHeight > 0) {
+            const float logoSize = 44.0f;
+            ImGui::SetCursorPosX((ImGui::GetWindowSize().x - logoSize) * 0.5f);
+            ImGui::Image(reinterpret_cast<ImTextureID>(state->logoTexture), ImVec2(logoSize, logoSize));
+        } else {
+            ImGui::SetCursorPosX(28.0f);
+            ImGui::TextColored(ImVec4(0.56f, 0.49f, 1.0f, 1.0f), "VT");
+        }
         ImGui::Spacing();
         ImGui::Separator();
 
@@ -1580,17 +1872,17 @@ void renderSidebar(RuntimeState* state,
             }
         }
 
-        const float bottomY = ImGui::GetWindowSize().y - 102.0f;
+        const float bottomY = ImGui::GetWindowSize().y - 136.0f;
         ImGui::SetCursorPosY(std::max(bottomY, ImGui::GetCursorPosY() + 12.0f));
-        drawStatusChip("Admin", ImVec4(0.26f, 0.20f, 0.56f, 0.95f), ImVec4(0.97f, 0.96f, 1.0f, 1.0f));
-        ImGui::SameLine();
-        drawStatusChip("Offline", ImVec4(0.20f, 0.22f, 0.31f, 0.95f), ImVec4(0.92f, 0.92f, 0.96f, 1.0f));
+        voidcare::app::theme::StatusChip("Admin", voidcare::app::theme::ChipVariant::Accent);
         ImGui::Spacing();
+        const QByteArray userUtf8 = qEnvironmentVariable("USERNAME").toUtf8();
+        ImGui::TextColored(ImVec4(0.66f, 0.66f, 0.78f, 1.0f), "%s", userUtf8.constData());
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 72.0f);
-        ImGui::TextColored(ImVec4(0.66f, 0.66f, 0.78f, 1.0f), "Ysf");
+        ImGui::TextColored(ImVec4(0.58f, 0.58f, 0.72f, 1.0f), "%s", kCreditsText);
         ImGui::PopTextWrapPos();
     }
-    voidcare::app::theme::endCard();
+    voidcare::app::theme::EndPanel();
 }
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1636,6 +1928,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const HRESULT comInitResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitializeCom = SUCCEEDED(comInitResult);
 
     int qtArgc = 1;
     char appName[] = "VoidCare";
@@ -1777,12 +2071,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         state.pageFade = std::min(1.0f, state.pageFade + ImGui::GetIO().DeltaTime * 4.8f);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, state.pageFade);
 
-        if (voidcare::app::theme::beginCard("content_surface", ImVec2(0.0f, 0.0f))) {
+        if (voidcare::app::theme::BeginPanel("content_surface", nullptr, ImVec2(0.0f, 0.0f))) {
             const QString searchNeedle = QString::fromUtf8(state.searchBuffer.data()).trimmed();
             ImGui::TextColored(ImVec4(0.93f, 0.93f, 0.99f, 1.0f), "%s", pageName(state.ui.page));
             if (state.pendingCount > 0) {
                 ImGui::SameLine();
-                drawStatusChip("Working...", ImVec4(0.27f, 0.21f, 0.56f, 0.95f), ImVec4(0.95f, 0.95f, 1.0f, 1.0f));
+                voidcare::app::theme::StatusChip("Working...", voidcare::app::theme::ChipVariant::Accent);
             }
             ImGui::Separator();
 
@@ -1807,9 +2101,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
                 renderAbout(&state);
                 break;
             }
+            ImGui::Spacing();
+            renderLogsDrawer(&state, true);
             ImGui::EndChild();
         }
-        voidcare::app::theme::endCard();
+        voidcare::app::theme::EndPanel();
         ImGui::PopStyleVar();
 
         ImGui::Spacing();
@@ -1838,6 +2134,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     }
 
     state.dispatcher.stop();
+    releaseSidebarLogo(&state);
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -1846,6 +2143,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     cleanupDeviceD3D();
     DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
+
+    if (shouldUninitializeCom) {
+        CoUninitialize();
+    }
 
     return 0;
 }

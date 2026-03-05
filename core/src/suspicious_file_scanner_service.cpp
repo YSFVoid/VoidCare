@@ -82,7 +82,6 @@ QVector<SuspiciousFileRecord> SuspiciousFileScannerService::scanQuick(
     QStringList roots = platform::windows::quickScanRoots();
     for (const auto& entry : persistenceEntries) {
         if (!entry.path.trimmed().isEmpty()) {
-            roots << QFileInfo(entry.path).absolutePath();
             roots << entry.path;
         }
     }

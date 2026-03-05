@@ -17,6 +17,8 @@ constexpr ImVec4 kText = ImVec4(0.910f, 0.910f, 0.941f, 1.0f);            // #E8
 constexpr ImVec4 kMuted = ImVec4(0.651f, 0.651f, 0.753f, 1.0f);           // #A6A6C0
 constexpr ImVec4 kAccent = ImVec4(0.486f, 0.361f, 1.000f, 1.0f);          // #7C5CFF
 
+thread_local int g_panelDepth = 0;
+
 ImU32 toColorU32(const ImVec4& color, const float alphaMul = 1.0f) {
     return ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, color.w * alphaMul));
 }
@@ -44,6 +46,10 @@ ThemeMetrics metrics(const float dpiScale) {
     m.cardRadius *= dpiScale;
     m.controlHeight *= dpiScale;
     return m;
+}
+
+void ApplyVoidCareStyle(const float dpiScale) {
+    applyVoidCareStyle(dpiScale);
 }
 
 void applyVoidCareStyle(const float dpiScale) {
@@ -120,6 +126,150 @@ void drawBackdrop(const ImVec2& pos, const ImVec2& size) {
     drawList->AddRectFilled(ImVec2(pos.x, end.y - vignette), end, toColorU32(ImVec4(0, 0, 0, 0.42f)));
     drawList->AddRectFilled(pos, ImVec2(pos.x + vignette, end.y), toColorU32(ImVec4(0, 0, 0, 0.25f)));
     drawList->AddRectFilled(ImVec2(end.x - vignette, pos.y), end, toColorU32(ImVec4(0, 0, 0, 0.25f)));
+}
+
+bool BeginPanel(const char* id,
+                const char* title,
+                const ImVec2& size,
+                const char* subtitle,
+                const std::function<void()>& rightHeaderWidget) {
+    ImGui::PushID(id);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(kSurface.x, kSurface.y, kSurface.z, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(kBorder.x, kBorder.y, kBorder.z, 0.80f));
+    const bool begun = ImGui::BeginChild("##panel", size, true, ImGuiWindowFlags_NoScrollbar);
+    if (!begun) {
+        return false;
+    }
+
+    ++g_panelDepth;
+
+    const ImRect rect(ImGui::GetWindowPos(), ImGui::GetWindowPos() + ImGui::GetWindowSize());
+    const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    drawCardShadow(rect, 16.0f, hovered ? 1.35f : 1.0f);
+    ImGui::GetWindowDrawList()->AddRectFilledMultiColor(
+        rect.Min,
+        rect.Max,
+        toColorU32(hovered ? ImVec4(0.13f, 0.13f, 0.22f, 0.96f) : ImVec4(0.10f, 0.10f, 0.17f, 0.93f)),
+        toColorU32(hovered ? ImVec4(0.08f, 0.08f, 0.14f, 0.96f) : ImVec4(0.07f, 0.07f, 0.12f, 0.93f)),
+        toColorU32(hovered ? ImVec4(0.08f, 0.08f, 0.14f, 0.98f) : ImVec4(0.07f, 0.07f, 0.12f, 0.97f)),
+        toColorU32(hovered ? ImVec4(0.13f, 0.13f, 0.22f, 0.98f) : ImVec4(0.10f, 0.10f, 0.17f, 0.97f)));
+    ImGui::GetWindowDrawList()->AddRect(
+        rect.Min,
+        rect.Max,
+        toColorU32(ImVec4(kBorder.x, kBorder.y, kBorder.z, hovered ? 0.95f : 0.72f)),
+        16.0f,
+        0,
+        hovered ? 1.3f : 1.0f);
+
+    if (title != nullptr && title[0] != '\0') {
+        ImGui::TextColored(kText, "%s", title);
+        if (subtitle != nullptr && subtitle[0] != '\0') {
+            ImGui::TextColored(kMuted, "%s", subtitle);
+        }
+        if (rightHeaderWidget) {
+            const float targetX = ImGui::GetWindowSize().x - ImGui::GetStyle().WindowPadding.x - 190.0f;
+            const float baseY = ImGui::GetCursorPosY() - ImGui::GetTextLineHeightWithSpacing();
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), targetX));
+            ImGui::SetCursorPosY(baseY);
+            rightHeaderWidget();
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+
+    return true;
+}
+
+void EndPanel() {
+    if (g_panelDepth > 0) {
+        --g_panelDepth;
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
+    ImGui::PopID();
+}
+
+bool BeginSettingRows(const char* id) {
+    const ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchProp |
+                                  ImGuiTableFlags_NoSavedSettings |
+                                  ImGuiTableFlags_PadOuterX |
+                                  ImGuiTableFlags_BordersInnerV;
+    if (!ImGui::BeginTable(id, 2, flags)) {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+    ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    return true;
+}
+
+void SettingRow(const char* label, const char* description, const std::function<void()>& drawControlFn) {
+    if (ImGui::GetCurrentTable() == nullptr) {
+        return;
+    }
+
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextColored(kText, "%s", label != nullptr ? label : "");
+    if (description != nullptr && description[0] != '\0') {
+        ImGui::TextColored(kMuted, "%s", description);
+    }
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::PushID(label != nullptr ? label : "setting_row");
+    if (drawControlFn) {
+        drawControlFn();
+    }
+    ImGui::PopID();
+}
+
+void EndSettingRows() {
+    if (ImGui::GetCurrentTable() != nullptr) {
+        ImGui::EndTable();
+    }
+}
+
+void StatusChip(const char* text, const ChipVariant variant) {
+    ImVec4 bg = ImVec4(0.21f, 0.22f, 0.30f, 0.95f);
+    ImVec4 fg = ImVec4(0.92f, 0.92f, 0.96f, 1.0f);
+    switch (variant) {
+    case ChipVariant::Accent:
+        bg = ImVec4(0.30f, 0.22f, 0.66f, 0.96f);
+        fg = ImVec4(0.97f, 0.95f, 1.0f, 1.0f);
+        break;
+    case ChipVariant::Success:
+        bg = ImVec4(0.13f, 0.35f, 0.26f, 0.95f);
+        fg = ImVec4(0.91f, 1.0f, 0.93f, 1.0f);
+        break;
+    case ChipVariant::Warning:
+        bg = ImVec4(0.43f, 0.31f, 0.12f, 0.95f);
+        fg = ImVec4(1.0f, 0.96f, 0.87f, 1.0f);
+        break;
+    case ChipVariant::Danger:
+        bg = ImVec4(0.42f, 0.18f, 0.23f, 0.95f);
+        fg = ImVec4(1.0f, 0.88f, 0.88f, 1.0f);
+        break;
+    case ChipVariant::Neutral:
+        break;
+    }
+
+    const char* safeText = text != nullptr ? text : "";
+    const ImVec2 textSize = ImGui::CalcTextSize(safeText);
+    const ImVec2 padding(10.0f, 5.0f);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 size(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f);
+    const ImRect rect(pos, pos + size);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(rect.Min, rect.Max, toColorU32(bg), size.y * 0.5f);
+    drawList->AddRect(rect.Min, rect.Max, toColorU32(ImVec4(bg.x, bg.y, bg.z, 0.92f)), size.y * 0.5f);
+    drawList->AddText(ImVec2(rect.Min.x + padding.x, rect.Min.y + padding.y), toColorU32(fg), safeText);
+    ImGui::Dummy(size);
 }
 
 bool sidebarItem(const char* icon, const char* id, const bool selected, const ImVec2& size) {
@@ -215,33 +365,7 @@ bool sliderBar(const char* id,
 }
 
 bool beginCard(const char* id, const ImVec2& size) {
-    ImGui::PushID(id);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(kSurface.x, kSurface.y, kSurface.z, 0.96f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(kBorder.x, kBorder.y, kBorder.z, 0.80f));
-    const bool begun = ImGui::BeginChild("##card", size, true, ImGuiWindowFlags_NoScrollbar);
-    if (begun) {
-        const ImRect rect(ImGui::GetWindowPos(), ImGui::GetWindowPos() + ImGui::GetWindowSize());
-        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-        const float hoverBoost = hovered ? 1.45f : 1.0f;
-        drawCardShadow(rect, 16.0f, hoverBoost);
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(
-            rect.Min,
-            rect.Max,
-            toColorU32(hovered ? ImVec4(0.13f, 0.13f, 0.23f, 0.95f) : ImVec4(0.10f, 0.10f, 0.18f, 0.92f)),
-            toColorU32(hovered ? ImVec4(0.09f, 0.09f, 0.16f, 0.95f) : ImVec4(0.07f, 0.07f, 0.12f, 0.92f)),
-            toColorU32(hovered ? ImVec4(0.08f, 0.08f, 0.15f, 0.98f) : ImVec4(0.07f, 0.07f, 0.12f, 0.96f)),
-            toColorU32(hovered ? ImVec4(0.13f, 0.13f, 0.23f, 0.98f) : ImVec4(0.10f, 0.10f, 0.18f, 0.96f)));
-        ImGui::GetWindowDrawList()->AddRect(
-            rect.Min,
-            rect.Max,
-            toColorU32(ImVec4(kBorder.x, kBorder.y, kBorder.z, hovered ? 0.95f : 0.70f)),
-            16.0f,
-            0,
-            hovered ? 1.3f : 1.0f);
-    }
-    return begun;
+    return BeginPanel(id, nullptr, size);
 }
 
 void cardHeader(const char* title, const char* subtitle) {
@@ -253,10 +377,7 @@ void cardHeader(const char* title, const char* subtitle) {
 }
 
 void endCard() {
-    ImGui::EndChild();
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(2);
-    ImGui::PopID();
+    EndPanel();
 }
 
 }  // namespace voidcare::app::theme

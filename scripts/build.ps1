@@ -74,4 +74,4 @@ if ($BuildWpf) {
     }
 }
 
-Write-Host "Build completed ($Configuration). ImGui frontend is the default executable."
+Write-Host "Build completed ($Configuration). CLI frontend (voidcare.exe) is the default executable."

@@ -6,32 +6,93 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 
 namespace voidcare::core {
 
 namespace {
 
-bool clearDirectory(const QString& directoryPath) {
-    QDir dir(directoryPath);
-    if (!dir.exists()) {
-        return true;
+QDateTime cutoffDate(const int days) {
+    if (days <= 0) {
+        return QDateTime();
+    }
+    return QDateTime::currentDateTimeUtc().addDays(-days);
+}
+
+SafeCleanupSummary cleanTempPath(const QString& directoryPath,
+                                 const SafeCleanupOptions& options,
+                                 const bool cautiousMode,
+                                 const LogCallback& logCallback) {
+    SafeCleanupSummary summary;
+    QDir root(directoryPath);
+    if (!root.exists()) {
+        return summary;
     }
 
-    bool ok = true;
-    const QFileInfoList entries =
-        dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Dirs | QDir::Hidden | QDir::System);
-    for (const QFileInfo& info : entries) {
+    const QDateTime cutoff = cutoffDate(options.olderThanDays);
+    QDirIterator iterator(directoryPath,
+                          QDir::NoDotAndDotDot | QDir::Files | QDir::Dirs | QDir::Hidden | QDir::System,
+                          QDirIterator::Subdirectories);
+    QSet<QString> visitedDirs;
+    while (iterator.hasNext()) {
+        const QString path = iterator.next();
+        const QFileInfo info(path);
+        if (!info.exists()) {
+            continue;
+        }
+
         if (info.isDir()) {
-            QDir subDir(info.absoluteFilePath());
-            ok = ok && subDir.removeRecursively();
-        } else {
-            ok = ok && QFile::remove(info.absoluteFilePath());
+            visitedDirs.insert(info.absoluteFilePath());
+            continue;
+        }
+
+        summary.filesScanned += 1;
+        if (cutoff.isValid() && info.lastModified().toUTC() > cutoff) {
+            continue;
+        }
+
+        if (cautiousMode) {
+            const QFile::Permissions perms = info.permissions();
+            if ((perms & QFile::WriteOwner) == 0) {
+                continue;
+            }
+        }
+
+        summary.filesDeleted += 1;
+        summary.bytesFreed += static_cast<quint64>(std::max<qint64>(0, info.size()));
+        if (options.dryRun) {
+            continue;
+        }
+
+        if (!QFile::remove(path)) {
+            summary.success = false;
+            summary.warnings << QStringLiteral("Failed to remove: %1").arg(path);
         }
     }
-    return ok;
+
+    if (!options.dryRun) {
+        QList<QString> dirs = visitedDirs.values();
+        std::sort(dirs.begin(), dirs.end(), [](const QString& left, const QString& right) {
+            return left.size() > right.size();
+        });
+        for (const QString& dirPath : dirs) {
+            QDir(dirPath).rmdir(QStringLiteral("."));
+        }
+    }
+
+    if (logCallback) {
+        logCallback(QStringLiteral("Processed %1: scanned=%2, candidates=%3")
+                        .arg(directoryPath)
+                        .arg(summary.filesScanned)
+                        .arg(summary.filesDeleted),
+                    false);
+    }
+    return summary;
 }
 
 QStringList topMemoryProcesses() {
@@ -91,33 +152,73 @@ OptimizationService::OptimizationService(ProcessRunner* runner,
     , m_runner(runner)
     , m_persistenceAudit(persistenceAudit) {}
 
-AntivirusActionResult OptimizationService::runSafeCleanup(const LogCallback& logCallback) const {
-    bool ok = true;
+SafeCleanupSummary OptimizationService::runSafeCleanupDetailed(const SafeCleanupOptions& options,
+                                                               const LogCallback& logCallback) const {
+    SafeCleanupSummary total;
+    QSet<QString> seenRoots;
+    auto merge = [&total](const SafeCleanupSummary& part) {
+        total.success = total.success && part.success;
+        total.filesScanned += part.filesScanned;
+        total.filesDeleted += part.filesDeleted;
+        total.bytesFreed += part.bytesFreed;
+        total.warnings << part.warnings;
+    };
 
-    const QString tempPath = QDir::tempPath();
-    ok = clearDirectory(tempPath) && ok;
-    if (logCallback) {
-        logCallback(QStringLiteral("Temp cleanup %1.").arg(ok ? QStringLiteral("completed")
-                                                               : QStringLiteral("had errors")),
-                    !ok);
-    }
-
-    const HRESULT recycleResult = SHEmptyRecycleBinW(nullptr, nullptr,
-                                                     SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI |
-                                                         SHERB_NOSOUND);
-    if (recycleResult != S_OK && recycleResult != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
-        ok = false;
-        if (logCallback) {
-            logCallback(QStringLiteral("Recycle Bin cleanup failed."), true);
+    auto addRoot = [&seenRoots](const QString& root) -> QString {
+        const QString normalized = QDir::cleanPath(root).toLower();
+        if (normalized.isEmpty() || seenRoots.contains(normalized)) {
+            return {};
         }
-    } else if (logCallback) {
-        logCallback(QStringLiteral("Recycle Bin cleaned."), false);
+        seenRoots.insert(normalized);
+        return QDir::cleanPath(root);
+    };
+
+    const QString tempRoot = addRoot(QDir::tempPath());
+    if (!tempRoot.isEmpty()) {
+        merge(cleanTempPath(tempRoot, options, false, logCallback));
     }
 
-    return {ok,
-            ok ? QStringLiteral("Safe cleanup completed.")
-               : QStringLiteral("Safe cleanup completed with warnings."),
-            ok ? 0 : 1};
+    const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
+    if (!localAppData.isEmpty()) {
+        const QString localTempRoot = addRoot(localAppData + QStringLiteral("/Temp"));
+        if (!localTempRoot.isEmpty()) {
+            merge(cleanTempPath(localTempRoot, options, false, logCallback));
+        }
+    }
+
+    if (options.includeWindowsTemp) {
+        const QString windowsRoot = qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows"));
+        const QString windowsTempRoot = addRoot(windowsRoot + QStringLiteral("/Temp"));
+        if (!windowsTempRoot.isEmpty()) {
+            merge(cleanTempPath(windowsTempRoot, options, true, logCallback));
+        }
+    }
+
+    if (!options.dryRun) {
+        const HRESULT recycleResult = SHEmptyRecycleBinW(nullptr,
+                                                         nullptr,
+                                                         SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND);
+        if (recycleResult != S_OK && recycleResult != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
+            total.success = false;
+            total.warnings << QStringLiteral("Recycle Bin cleanup failed.");
+        } else if (logCallback) {
+            logCallback(QStringLiteral("Recycle Bin cleaned."), false);
+        }
+    }
+
+    return total;
+}
+
+AntivirusActionResult OptimizationService::runSafeCleanup(const LogCallback& logCallback) const {
+    SafeCleanupOptions options;
+    options.olderThanDays = 2;
+    options.includeWindowsTemp = false;
+    options.dryRun = false;
+    const SafeCleanupSummary summary = runSafeCleanupDetailed(options, logCallback);
+    return {summary.success,
+            summary.success ? QStringLiteral("Safe cleanup completed.")
+                            : QStringLiteral("Safe cleanup completed with warnings."),
+            summary.success ? 0 : 1};
 }
 
 HealthReport OptimizationService::collectHealthReport() const {
