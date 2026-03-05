@@ -44,6 +44,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-portable.ps1 -BuildDi
 
 Distribution format is portable folder/zip (`VoidCare.exe` + `VoidCare.Bridge.exe` + required runtime files). It is not a single-file EXE.
 
+Run the packaged app from:
+
+```powershell
+.\dist\VoidCare\VoidCare.exe
+```
+
+Do not run stale legacy binaries under `build\app\...` if that folder exists from older builds.
+
 ## Discord Rich Presence
 
 - Local IPC only: `\\?\pipe\discord-ipc-0` .. `\\?\pipe\discord-ipc-9`

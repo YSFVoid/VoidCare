@@ -24,6 +24,13 @@ if (!(Test-Path $buildPath)) {
     throw "Build directory '$buildPath' does not exist. Run scripts/configure.ps1 first."
 }
 
+# Remove stale legacy frontend outputs so users do not accidentally run old Qt/QML executables.
+$legacyAppDir = Join-Path $buildPath "app"
+if (Test-Path $legacyAppDir) {
+    Remove-Item -Path $legacyAppDir -Recurse -Force
+    Write-Host "Removed legacy build artifacts: $legacyAppDir"
+}
+
 & $cmakeExe --build $buildPath --config $Configuration
 if ($LASTEXITCODE -ne 0) {
     throw "Build failed with exit code $LASTEXITCODE."
