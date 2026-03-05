@@ -1,69 +1,87 @@
-﻿# VoidCare (VoidTools)
+# VoidCare (VoidTools)
 
 Windows x64 offline optimization, health, and security multi-tool.
-Frontend: WPF (`net8.0-windows`, x64).
-Backend: C++20 services over local JSONL bridge (`VoidCare.Bridge.exe`).
+
+Primary UI: ImGui (`VoidCare.exe`)  
+Optional experimental UI: WPF + bridge (disabled by default)
 
 **Developed by Ysf (Lone Wolf Developer)**
 
-## Platform
+## Platform and Safety
 
 - Windows 10/11 x64 only
-- Administrator launch required
+- Administrator launch required (`requireAdministrator` manifest)
 - Offline-only behavior (no HTTP/web API usage)
-
-## Safety Rules
-
 - No custom antivirus engine
 - Defender-only auto-remediation, and only for Defender-detected threats
-- Suspicious scan is heuristic-only and may produce false positives
+- Suspicious-file scanner is heuristic-only and may produce false positives
 - Suspicious files are never auto-deleted
-- Default action is quarantine-first
+- Default suspicious action is quarantine-first
 - Destructive actions require confirmation and restore-point attempt
 
 ## Build Requirements
 
 - Visual Studio 2022 (MSVC x64)
 - CMake 3.24+
-- Qt 6.6+ SDK (for bridge/runtime dependencies)
-- .NET SDK 8+
+- Qt 6.6+ SDK (used by core/ui services and deployment)
 - PowerShell 5+
+- Optional for WPF path: .NET 8 SDK
+
+## Configure
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -QtDir "C:\Qt\6.8.0\msvc2022_64"
+```
+
+Optional experimental WPF/bridge enable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -BuildWpf -QtDir "C:\Qt\6.8.0\msvc2022_64"
+```
 
 ## Build
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -QtDir "C:\Qt\6.8.0\msvc2022_64"
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Configuration Release -BuildTests
 ```
 
+Optional WPF build in same pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Configuration Release -BuildTests -BuildWpf
+```
+
 ## Package (Portable)
+
+Default package (ImGui primary):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\package-portable.ps1 -BuildDir build -Configuration Release -OutputDir dist
 ```
 
-Distribution format is portable folder/zip (`VoidCare.exe` + `VoidCare.Bridge.exe` + required runtime files). It is not a single-file EXE.
-
-Run the packaged app from:
+Include optional experimental WPF artifacts:
 
 ```powershell
-.\dist\VoidCare\VoidCare.exe
+powershell -ExecutionPolicy Bypass -File .\scripts\package-portable.ps1 -BuildDir build -Configuration Release -OutputDir dist -IncludeWpf
 ```
 
-Do not run stale legacy binaries under `build\app\...` if that folder exists from older builds.
+Portable distribution is a folder/zip with `VoidCare.exe` plus runtime DLLs (`windeployqt`).  
+It is not a single-file EXE.
 
 ## Discord Rich Presence
 
 - Local IPC only: `\\?\pipe\discord-ipc-0` .. `\\?\pipe\discord-ipc-9`
-- Requires Discord desktop client running locally
+- Requires local Discord desktop client running
 - Build-time client id variable: `VOIDCARE_DISCORD_CLIENT_ID`
-- Current default client id in this repo: `1479026910574153921`
+- Current default client id: `1479026910574153921`
+- No web calls are used for RPC
 
-## Layout
+## Repo Layout
 
+- `app/` ImGui frontend (primary)
 - `core/`
 - `platform/windows/`
-- `bridge/`
-- `ui/`
+- `ui/` C++ AppController and optional WPF project
+- `bridge/` optional bridge executable (for WPF path)
 - `scripts/`
 - `tests/`

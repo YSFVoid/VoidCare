@@ -3,7 +3,9 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$BuildType = "Release",
     [string]$DiscordClientId = "1479026910574153921",
-    [string]$QtDir = ""
+    [string]$QtDir = "",
+    [switch]$DisableImGui,
+    [switch]$BuildWpf
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +109,14 @@ $cmakeArgs = @(
     "-DVOIDCARE_DISCORD_CLIENT_ID=$DiscordClientId",
     "-DCMAKE_BUILD_TYPE=$BuildType"
 )
+
+$imguiValue = if ($DisableImGui) { "OFF" } else { "ON" }
+$wpfValue = if ($BuildWpf) { "ON" } else { "OFF" }
+$bridgeValue = if ($BuildWpf) { "ON" } else { "OFF" }
+
+$cmakeArgs += "-DVOIDCARE_BUILD_IMGUI=$imguiValue"
+$cmakeArgs += "-DVOIDCARE_BUILD_WPF=$wpfValue"
+$cmakeArgs += "-DVOIDCARE_BUILD_BRIDGE=$bridgeValue"
 
 if ($resolvedQt6Dir) {
     $cmakeArgs += "-DQt6_DIR=$resolvedQt6Dir"

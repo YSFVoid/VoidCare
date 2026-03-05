@@ -76,7 +76,7 @@ QString AppController::footerText() const {
 }
 
 QString AppController::warningBannerText() const {
-    return QStringLiteral("Suspicious ≠ confirmed malware. Review before deleting.");
+    return QStringLiteral("Suspicious != confirmed malware. Review before deleting.");
 }
 
 bool AppController::discordEnabled() const {

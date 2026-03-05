@@ -3,7 +3,7 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [switch]$BuildTests,
-    [switch]$SkipWpf
+    [switch]$BuildWpf
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,13 +22,6 @@ if ([string]::IsNullOrWhiteSpace($cmakeExe)) {
 
 if (!(Test-Path $buildPath)) {
     throw "Build directory '$buildPath' does not exist. Run scripts/configure.ps1 first."
-}
-
-# Remove stale legacy frontend outputs so users do not accidentally run old Qt/QML executables.
-$legacyAppDir = Join-Path $buildPath "app"
-if (Test-Path $legacyAppDir) {
-    Remove-Item -Path $legacyAppDir -Recurse -Force
-    Write-Host "Removed legacy build artifacts: $legacyAppDir"
 }
 
 & $cmakeExe --build $buildPath --config $Configuration
@@ -63,7 +56,7 @@ if ($BuildTests) {
     }
 }
 
-if (-not $SkipWpf) {
+if ($BuildWpf) {
     $wpfProject = Join-Path $repoRoot "ui\\VoidCare.Wpf.csproj"
     if (Test-Path $wpfProject) {
         & dotnet build $wpfProject -c $Configuration -p:Platform=x64
@@ -81,4 +74,4 @@ if (-not $SkipWpf) {
     }
 }
 
-Write-Host "Build completed ($Configuration)."
+Write-Host "Build completed ($Configuration). ImGui frontend is the default executable."

@@ -15,7 +15,10 @@
         "Qt6_DIR": "$env{Qt6_DIR}",
         "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}",
         "VOIDCARE_DISCORD_CLIENT_ID": "1479026910574153921",
-        "VOIDCARE_ENABLE_TESTS": "ON"
+        "VOIDCARE_ENABLE_TESTS": "ON",
+        "VOIDCARE_BUILD_IMGUI": "ON",
+        "VOIDCARE_BUILD_WPF": "OFF",
+        "VOIDCARE_BUILD_BRIDGE": "OFF"
       }
     }
   ],
