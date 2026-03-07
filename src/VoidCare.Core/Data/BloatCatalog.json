@@ -1,0 +1,82 @@
+[
+  {
+    "key": "appx-3dviewer",
+    "displayName": "3D Viewer",
+    "type": "appx",
+    "match": "Microsoft.Microsoft3DViewer",
+    "matchMode": "packageName",
+    "reason": "Optional consumer utility."
+  },
+  {
+    "key": "appx-solitaire",
+    "displayName": "Microsoft Solitaire Collection",
+    "type": "appx",
+    "match": "Microsoft.MicrosoftSolitaireCollection",
+    "matchMode": "packageName",
+    "reason": "Optional bundled game."
+  },
+  {
+    "key": "appx-mixedreality",
+    "displayName": "Mixed Reality Portal",
+    "type": "appx",
+    "match": "Microsoft.MixedReality.Portal",
+    "matchMode": "packageName",
+    "reason": "Optional mixed reality component."
+  },
+  {
+    "key": "appx-xboxapp",
+    "displayName": "Xbox App",
+    "type": "appx",
+    "match": "Microsoft.GamingApp",
+    "matchMode": "packageName",
+    "reason": "Optional Xbox experience app."
+  },
+  {
+    "key": "appx-xboxtcui",
+    "displayName": "Xbox TCUI",
+    "type": "appx",
+    "match": "Microsoft.Xbox.TCUI",
+    "matchMode": "packageName",
+    "reason": "Optional Xbox shell component."
+  },
+  {
+    "key": "appx-xboxoverlay",
+    "displayName": "Xbox Game Bar",
+    "type": "appx",
+    "match": "Microsoft.XboxGamingOverlay",
+    "matchMode": "packageName",
+    "reason": "Optional gaming overlay."
+  },
+  {
+    "key": "appx-clipchamp",
+    "displayName": "Clipchamp",
+    "type": "appx",
+    "match": "Clipchamp.Clipchamp",
+    "matchMode": "packageName",
+    "reason": "Optional video editor."
+  },
+  {
+    "key": "appx-bingnews",
+    "displayName": "Microsoft Start",
+    "type": "appx",
+    "match": "Microsoft.BingNews",
+    "matchMode": "packageName",
+    "reason": "Optional news app."
+  },
+  {
+    "key": "win32-teams",
+    "displayName": "Microsoft Teams",
+    "type": "win32",
+    "match": "Teams",
+    "matchMode": "nameContains",
+    "reason": "Optional collaboration client."
+  },
+  {
+    "key": "win32-onedrive",
+    "displayName": "Microsoft OneDrive",
+    "type": "win32",
+    "match": "OneDrive",
+    "matchMode": "nameContains",
+    "reason": "Optional sync client."
+  }
+]

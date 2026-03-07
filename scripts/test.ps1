@@ -5,4 +5,4 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-dotnet build (Join-Path $repoRoot "VoidCare.sln") -c $Configuration
+dotnet test (Join-Path $repoRoot "tests\VoidCare.Tests\VoidCare.Tests.csproj") -c $Configuration

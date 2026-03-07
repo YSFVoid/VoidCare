@@ -1,62 +1,79 @@
-# VoidCare (VoidTools) - CLI First
+# VoidCare
 
-Premium Windows x64 offline optimization + security command-line tool.
+Premium Windows x64 offline optimization and security terminal tool.
 
-**Developed by Ysf (Lone Wolf Developer)**
+Developed by Ysf (Lone Wolf Developer)
 
-## Safety and Constraints
+## Overview
 
-- Windows 10/11 x64 only
-- Offline-only behavior (no HTTP, no downloads, no telemetry)
-- No custom antivirus engine
-- Defender-only remediation for Defender-detected threats
-- Suspicious scan is heuristic-only and can produce false positives
-- Suspicious files are never auto-deleted automatically
-- Quarantine-first workflow
-- Destructive actions require confirmation and restore-point attempt
+- Terminal-only Windows utility built with C# .NET 8.
+- Offline-only runtime behavior: no HTTP, no downloads, no telemetry.
+- Windows x64 only.
+- Single shipped product: `voidcare.exe`.
+- Defender-only remediation. VoidCare does not claim malware unless Microsoft Defender explicitly detects it.
 
-## Build Requirements
+## Safety Rules
 
-- Visual Studio 2022 (MSVC x64)
-- CMake 3.24+
-- Qt 6.6+ SDK
-- PowerShell 5+
+- Suspicious-file scanning is heuristic-only and can produce false positives.
+- Suspicious files are never auto-deleted by heuristic results.
+- Default suspicious-file action is quarantine.
+- Permanent delete is a separate command and requires explicit confirmation.
+- Admin-only actions detect elevation and warn clearly.
+- Restore points are attempted before destructive actions where appropriate.
 
-## Configure
+## Repo Layout
 
-CLI-first default:
+- `src/VoidCare.Cli` entrypoint, command parsing, interactive menu, terminal rendering
+- `src/VoidCare.Core` models, catalog data, suspicious-file heuristics
+- `src/VoidCare.Infrastructure` Windows integrations, Defender, registry, files, logs, state
+- `tests/VoidCare.Tests` unit tests
+- `scripts` restore, build, test, and publish helpers
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -QtDir "C:\Qt\6.8.0\msvc2022_64"
-```
+## Requirements
 
-Enable optional ImGui UI build too:
+- Windows 10/11 x64
+- .NET SDK 8+ for local builds
+- PowerShell 5.1+
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\configure.ps1 -BuildDir build -BuildType Release -EnableImGui -QtDir "C:\Qt\6.8.0\msvc2022_64"
-```
-
-## Build and Test
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -BuildDir build -Configuration Release -BuildTests
-```
-
-## Package (Portable)
+## Restore
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\package-portable.ps1 -BuildDir build -Configuration Release -OutputDir dist
+powershell -ExecutionPolicy Bypass -File .\scripts\restore.ps1
 ```
 
-Portable output includes `voidcare.exe` (or `VoidCare.exe` if UI build was selected as primary) plus required runtime DLLs.
+## Build
 
-## CLI Usage
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Configuration Release
+```
 
-Global flags:
+## Test
 
-- `--json` machine-readable output
-- `--yes` non-interactive confirmation
-- `--dry-run` preview changes without mutating system state
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 -Configuration Release
+```
+
+## Publish
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\publish.ps1 -Configuration Release -OutputDir dist
+```
+
+Exact publish command:
+
+```powershell
+dotnet publish src/VoidCare.Cli/VoidCare.Cli.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+```
+
+## Usage
+
+Interactive mode:
+
+```powershell
+voidcare
+voidcare menu
+voidcare interactive
+```
 
 Core:
 
@@ -77,40 +94,39 @@ voidcare security scan --full
 voidcare security scan --path "C:\Users\Administrator\Downloads"
 voidcare security remediate
 voidcare security persistence list
-# Use an exact ID returned by `security persistence list`
-voidcare security persistence disable --id "reg:HKCUSoftware\Microsoft\Windows\CurrentVersion\RunDiscord"
+voidcare security persistence disable --ids 1,2,3
 voidcare security suspicious scan --quick
 voidcare security suspicious scan --full --roots "C:\;D:\"
+voidcare security suspicious quarantine --ids 1,2,3
 voidcare security suspicious quarantine list
-voidcare security suspicious quarantine --ids 1,2,3 --quick
-voidcare security suspicious restore --id 2
-voidcare security suspicious restore --id 2 --to "C:\RestoreTarget"
-voidcare security suspicious delete --id 2
+voidcare security suspicious restore --id 1
+voidcare security suspicious delete --id 1
 ```
 
 Optimization:
 
 ```powershell
-voidcare optimize safe
-voidcare optimize safe --days 5
-voidcare optimize safe --days 5 --include-windows-temp
-voidcare optimize power --high
-voidcare optimize startup report
+voidcare optimize safe --dry-run
+voidcare optimize safe --days 3 --browser-cache
+voidcare optimize performance --confirm
+voidcare optimize aggressive --confirm --disable-copilot
+voidcare optimize startup list
+voidcare optimize startup disable --ids 1,2
 ```
 
-## Important Limitations
+Apps and logs:
 
-- `security remediate` only runs Defender remediation (`Remove-MpThreat`) and does not perform arbitrary delete actions.
-- Suspicious scan uses heuristic scoring; flagged entries are not confirmed malware unless Defender explicitly detects them.
-- `--dry-run` is enforced for mutating commands and prints planned actions.
-- Some commands require administrator privileges; tool reports when elevation is needed.
+```powershell
+voidcare apps list --type all
+voidcare apps bloat list
+voidcare apps bloat remove --ids 1,2 --confirm
+voidcare logs show --tail 50
+voidcare logs open
+```
 
-## Repo Layout
+## Notes
 
-- `cli/` CLI executable and CLI helpers
-- `core/` shared services (scan, persistence, suspicious, optimize, restore, process)
-- `platform/windows/` Windows helpers (admin, signature, hashing, paths)
-- `app/` optional ImGui frontend
-- `bridge/` optional bridge target
-- `scripts/` configure/build/package scripts
-- `tests/` unit/integration tests
+- `security remediate` uses Defender `Remove-MpThreat` only. It does not delete arbitrary files.
+- `security suspicious scan` reports suspicious heuristic results, not confirmed malware.
+- `--json` emits JSONL progress events for long tasks and a final result or error object.
+- Banner/help/about/version screens include the project credits line.

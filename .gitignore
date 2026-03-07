@@ -1,44 +1,22 @@
-# Build and generated directories
-/build/
-/build*/
-/out/
-/dist/
-/CMakeFiles/
-**/bin/
-**/obj/
-
-# CMake generated files
-/CMakeCache.txt
-/cmake_install.cmake
-/CTestTestfile.cmake
-/Makefile
-/compile_commands.json
+# Build outputs
+bin/
+obj/
+dist/
+dist-*/
+artifacts/
+TestResults/
 
 # Visual Studio
-/.vs/
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-*.VC.db
-*.VC.opendb
-*.opendb
-*.ipch
-*.tlog
+.vs/
+*.user
+*.suo
+*.cache
 
-# Logs and local artifacts
+# Logs and temp
 *.log
 *.tmp
-*.cache
-prompt2.txt
-_ref_menu3/
-_full_menu3/
+smoke-results*.json
 
-# Binaries/libraries
-*.obj
-*.pdb
-*.lib
-*.dll
-*.exe
-*.ilk
-*.exp
+# OS files
+Thumbs.db
+desktop.ini
