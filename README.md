@@ -19,7 +19,6 @@ Developed by Ysf (Lone Wolf Developer)
 - Windows x64 only
 - Offline-only
 - No telemetry
-- No GUI
 - Defender-only remediation
 - Suspicious results are heuristic-only
 - Default suspicious-file action is quarantine
@@ -30,5 +29,3 @@ Developed by Ysf (Lone Wolf Developer)
   `https://www.mediafire.com/file/cm95l8a59wr2noo/voidcare.exe/file`
 - Public release path to give users:
   `https://github.com/YSFVoid/VoidCare/releases/latest/download/voidcare.exe`
-- Local packaged file in this workspace:
-  `C:\Users\Administrator\Desktop\VoidCare C#\dist\voidcare.exe`
