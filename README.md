@@ -26,8 +26,9 @@ Developed by Ysf (Lone Wolf Developer)
 
 ## Download
 
+- Direct download:
+  `https://www.mediafire.com/file/cm95l8a59wr2noo/voidcare.exe/file`
 - Public release path to give users:
   `https://github.com/YSFVoid/VoidCare/releases/latest/download/voidcare.exe`
 - Local packaged file in this workspace:
   `C:\Users\Administrator\Desktop\VoidCare C#\dist\voidcare.exe`
-
